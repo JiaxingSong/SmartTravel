@@ -17,6 +17,8 @@ class TestAgentSetup:
         assert "search_flights" in SYSTEM_PROMPT
         assert "search_hotels" in SYSTEM_PROMPT
         assert "search_tickets" in SYSTEM_PROMPT
+        assert "save_preference" in SYSTEM_PROMPT
+        assert "get_preferences" in SYSTEM_PROMPT
 
     def test_create_travel_server_returns_server(self):
         server = create_travel_server()
@@ -46,12 +48,12 @@ class TestToolImports:
 
 
 class TestToolExecution:
-    """Tests that tool functions can be called directly."""
+    """Tests that tool handler functions can be called directly."""
 
     @pytest.mark.anyio
     async def test_flights_tool_returns_content(self):
         from smart_travel.tools.flights import search_flights_tool
-        result = await search_flights_tool({
+        result = await search_flights_tool.handler({
             "origin": "Seattle",
             "destination": "Tokyo",
             "departure_date": "2026-05-01",
@@ -64,7 +66,7 @@ class TestToolExecution:
     @pytest.mark.anyio
     async def test_hotels_tool_returns_content(self):
         from smart_travel.tools.hotels import search_hotels_tool
-        result = await search_hotels_tool({
+        result = await search_hotels_tool.handler({
             "city": "Tokyo",
             "check_in": "2026-05-01",
             "check_out": "2026-05-05",
@@ -76,7 +78,7 @@ class TestToolExecution:
     @pytest.mark.anyio
     async def test_tickets_tool_returns_content(self):
         from smart_travel.tools.tickets import search_tickets_tool
-        result = await search_tickets_tool({
+        result = await search_tickets_tool.handler({
             "city": "Tokyo",
             "date_from": "2026-05-01",
             "date_to": "2026-05-10",
@@ -88,7 +90,7 @@ class TestToolExecution:
     @pytest.mark.anyio
     async def test_flights_tool_no_results(self):
         from smart_travel.tools.flights import search_flights_tool
-        result = await search_flights_tool({
+        result = await search_flights_tool.handler({
             "origin": "Seattle",
             "destination": "Tokyo",
             "departure_date": "2026-05-01",
@@ -99,7 +101,7 @@ class TestToolExecution:
     @pytest.mark.anyio
     async def test_hotels_tool_no_results(self):
         from smart_travel.tools.hotels import search_hotels_tool
-        result = await search_hotels_tool({
+        result = await search_hotels_tool.handler({
             "city": "Tokyo",
             "check_in": "2026-05-01",
             "check_out": "2026-05-05",
@@ -111,7 +113,7 @@ class TestToolExecution:
     @pytest.mark.anyio
     async def test_tickets_tool_no_results(self):
         from smart_travel.tools.tickets import search_tickets_tool
-        result = await search_tickets_tool({
+        result = await search_tickets_tool.handler({
             "city": "Tokyo",
             "date_from": "2026-05-01",
             "date_to": "2026-05-10",

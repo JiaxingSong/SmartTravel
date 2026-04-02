@@ -2,9 +2,11 @@
 
 from __future__ import annotations
 
+import json
+
 from claude_agent_sdk import tool
 
-from smart_travel.data.mock_tickets import search_tickets as _search
+from smart_travel.data.resolver import search_tickets as _search
 
 
 @tool(
@@ -12,7 +14,7 @@ from smart_travel.data.mock_tickets import search_tickets as _search
     "Search for event tickets (concerts, sports, theater, museum exhibitions) "
     "in a city within a date range. Returns a list of events with prices, "
     "venues, dates, and ratings. Supports filtering by event type, maximum "
-    "price, and minimum rating.",
+    "price, and minimum rating. Use 'sources' to target specific providers.",
     {
         "city": str,
         "date_from": str,
@@ -20,17 +22,19 @@ from smart_travel.data.mock_tickets import search_tickets as _search
         "event_type": str,
         "max_price": float,
         "min_rating": float,
+        "sources": list,
     },
 )
 async def search_tickets_tool(args: dict) -> dict:
     """Execute ticket search and return results."""
-    results = _search(
+    results = await _search(
         city=args.get("city", ""),
         date_from=args.get("date_from", ""),
         date_to=args.get("date_to", ""),
         event_type=args.get("event_type"),
         max_price=args.get("max_price"),
         min_rating=args.get("min_rating"),
+        sources=args.get("sources"),
     )
 
     if not results:
@@ -44,7 +48,6 @@ async def search_tickets_tool(args: dict) -> dict:
             ]
         }
 
-    import json
     return {
         "content": [
             {

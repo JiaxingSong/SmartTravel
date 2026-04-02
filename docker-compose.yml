@@ -1,0 +1,23 @@
+# SmartTravel — optional PostgreSQL for persistent cache, sessions, and preferences
+# Start with: docker compose up -d
+# Then set: POSTGRES_DSN=postgresql://smarttravel:smarttravel_dev@localhost:5432/smarttravel
+
+services:
+  postgres:
+    image: postgres:16-alpine
+    environment:
+      POSTGRES_USER: smarttravel
+      POSTGRES_PASSWORD: smarttravel_dev
+      POSTGRES_DB: smarttravel
+    ports:
+      - "5432:5432"
+    volumes:
+      - pgdata:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U smarttravel"]
+      interval: 5s
+      timeout: 5s
+      retries: 5
+
+volumes:
+  pgdata:

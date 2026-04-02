@@ -30,3 +30,6 @@ Thumbs.db
 .pytest_cache/
 htmlcov/
 .coverage
+
+# Playwright MCP local data
+.playwright-mcp/

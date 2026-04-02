@@ -2,16 +2,21 @@
 
 from __future__ import annotations
 
+import json
+
 from claude_agent_sdk import tool
 
-from smart_travel.data.mock_flights import search_flights as _search
+from smart_travel.data.resolver import search_flights as _search
 
 
 @tool(
     "search_flights",
     "Search for flights between cities. Returns a list of available flights "
     "with prices, airlines, departure times, and number of stops. "
-    "Supports filtering by cabin class, maximum price, and maximum stops.",
+    "Supports filtering by cabin class, maximum price, and maximum stops. "
+    "Results may include cash prices and/or points/miles prices from "
+    "multiple sources. Use 'sources' to target specific providers and "
+    "'airlines' to filter by IATA airline code.",
     {
         "origin": str,
         "destination": str,
@@ -21,11 +26,13 @@ from smart_travel.data.mock_flights import search_flights as _search
         "passengers": int,
         "max_price": float,
         "max_stops": int,
+        "sources": list,
+        "airlines": list,
     },
 )
 async def search_flights_tool(args: dict) -> dict:
     """Execute flight search and return results."""
-    results = _search(
+    results = await _search(
         origin=args.get("origin", ""),
         destination=args.get("destination", ""),
         departure_date=args.get("departure_date", ""),
@@ -34,6 +41,8 @@ async def search_flights_tool(args: dict) -> dict:
         passengers=args.get("passengers", 1),
         max_price=args.get("max_price"),
         max_stops=args.get("max_stops"),
+        sources=args.get("sources"),
+        airlines=args.get("airlines"),
     )
 
     if not results:
@@ -47,7 +56,6 @@ async def search_flights_tool(args: dict) -> dict:
             ]
         }
 
-    import json
     return {
         "content": [
             {
