@@ -55,9 +55,8 @@ class TestGetAvailable:
         reg = SourceRegistry(no_keys_config)
         available = await reg.get_available("flights")
         names = [s.info.name for s in available]
-        # Amadeus / seats_aero should be excluded (no keys)
+        # Amadeus should be excluded (no keys)
         assert "amadeus" not in names
-        assert "seats_aero" not in names
         # Mock is always available
         assert "mock" in names
 

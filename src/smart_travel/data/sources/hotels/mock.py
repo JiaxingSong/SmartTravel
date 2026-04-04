@@ -20,7 +20,7 @@ class MockHotelSource(BaseHotelSource):
         name="mock",
         domain="hotels",
         fetch_method=FetchMethod.MOCK,
-        price_types=frozenset({PriceType.CASH}),
+        price_types=frozenset({PriceType.CASH, PriceType.POINTS}),
         priority=999,
         hotel_chains=frozenset(),
     )

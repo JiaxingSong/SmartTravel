@@ -18,7 +18,7 @@ from typing_extensions import NotRequired
 class FlightResult(TypedDict):
     """Normalised flight search result."""
 
-    source: str                              # "amadeus", "seats_aero", "mock", …
+    source: str                              # "amadeus", "mock", …
     flight_number: str
     airline: str
     origin: str

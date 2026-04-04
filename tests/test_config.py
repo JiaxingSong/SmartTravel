@@ -9,7 +9,6 @@ import pytest
 from smart_travel.config import (
     AmadeusConfig,
     AppConfig,
-    SeatsAeroConfig,
     TicketmasterConfig,
     load_config,
 )
@@ -34,15 +33,6 @@ class TestAmadeusConfig:
         assert cfg.base_url == "https://api.amadeus.com"
 
 
-class TestSeatsAeroConfig:
-
-    def test_default_is_unconfigured(self):
-        assert not SeatsAeroConfig().is_configured
-
-    def test_with_key(self):
-        assert SeatsAeroConfig(api_key="x").is_configured
-
-
 class TestTicketmasterConfig:
 
     def test_default_is_unconfigured(self):
@@ -59,13 +49,12 @@ class TestLoadConfig:
         load_config.cache_clear()
         for var in (
             "AMADEUS_API_KEY", "AMADEUS_API_SECRET", "AMADEUS_ENVIRONMENT",
-            "SEATS_AERO_API_KEY", "TICKETMASTER_API_KEY",
+            "TICKETMASTER_API_KEY",
         ):
             monkeypatch.delenv(var, raising=False)
 
         cfg = load_config()
         assert not cfg.amadeus.is_configured
-        assert not cfg.seats_aero.is_configured
         assert not cfg.ticketmaster.is_configured
         load_config.cache_clear()
 
@@ -73,12 +62,10 @@ class TestLoadConfig:
         load_config.cache_clear()
         monkeypatch.setenv("AMADEUS_API_KEY", "ak")
         monkeypatch.setenv("AMADEUS_API_SECRET", "as")
-        monkeypatch.setenv("SEATS_AERO_API_KEY", "sa")
         monkeypatch.setenv("TICKETMASTER_API_KEY", "tm")
 
         cfg = load_config()
         assert cfg.amadeus.is_configured
-        assert cfg.seats_aero.is_configured
         assert cfg.ticketmaster.is_configured
         load_config.cache_clear()
 

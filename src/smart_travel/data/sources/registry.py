@@ -8,6 +8,7 @@ lists sorted by priority.
 from __future__ import annotations
 
 import logging
+from dataclasses import dataclass
 from typing import Any
 
 from smart_travel.config import AppConfig
@@ -19,6 +20,42 @@ from smart_travel.data.sources.base import (
 )
 
 logger = logging.getLogger(__name__)
+
+
+@dataclass
+class SourceStatusEntry:
+    """Status of a single data source."""
+
+    name: str
+    domain: str
+    fetch_method: FetchMethod
+    price_types: frozenset[PriceType]
+    available: bool
+    reason: str  # "configured", "not_configured", "dependency_missing", "always_available"
+
+
+@dataclass
+class SourceStatus:
+    """Aggregated status of all data sources."""
+
+    sources: list[SourceStatusEntry]
+
+    @property
+    def any_live_available(self) -> bool:
+        """True if at least one non-mock source is available."""
+        return any(e.available and e.fetch_method != FetchMethod.MOCK for e in self.sources)
+
+    def for_domain(self, domain: str) -> list[SourceStatusEntry]:
+        """Return entries for a specific domain."""
+        return [e for e in self.sources if e.domain == domain]
+
+    def available_names(self, domain: str) -> list[str]:
+        """Return names of available sources for a domain."""
+        return [e.name for e in self.sources if e.domain == domain and e.available]
+
+    def unavailable_names(self, domain: str) -> list[str]:
+        """Return names of unavailable sources for a domain."""
+        return [e.name for e in self.sources if e.domain == domain and not e.available]
 
 
 class SourceRegistry:
@@ -38,16 +75,36 @@ class SourceRegistry:
         """Auto-register all built-in sources."""
         # Flights — API sources
         from smart_travel.data.sources.flights.amadeus import AmadeusFlightSource
-        from smart_travel.data.sources.flights.seats_aero import SeatsAeroFlightSource
         from smart_travel.data.sources.flights.mock import MockFlightSource
 
         self._register(AmadeusFlightSource(config.amadeus))
-        self._register(SeatsAeroFlightSource(config.seats_aero))
 
-        # Flights — Browser source (optional, requires playwright)
+        # Flights — Browser sources (optional, requires playwright)
         try:
             from smart_travel.data.sources.flights.google_flights import GoogleFlightsSource
             self._register(GoogleFlightsSource(config.browser))
+        except ImportError:
+            pass
+
+        # Flights — Airline award browser sources (optional, requires playwright)
+        try:
+            from smart_travel.data.sources.flights.united import UnitedAwardSource
+            self._register(UnitedAwardSource(config.browser))
+        except ImportError:
+            pass
+        try:
+            from smart_travel.data.sources.flights.delta import DeltaAwardSource
+            self._register(DeltaAwardSource(config.browser))
+        except ImportError:
+            pass
+        try:
+            from smart_travel.data.sources.flights.american import AmericanAwardSource
+            self._register(AmericanAwardSource(config.browser))
+        except ImportError:
+            pass
+        try:
+            from smart_travel.data.sources.flights.alaska import AlaskaAwardSource
+            self._register(AlaskaAwardSource(config.browser))
         except ImportError:
             pass
 
@@ -146,3 +203,27 @@ class SourceRegistry:
                     await s.close()
                 except Exception:
                     logger.debug("Error closing source %s", s.info.name, exc_info=True)
+
+    async def source_status(self) -> SourceStatus:
+        """Build a :class:`SourceStatus` snapshot for every registered source."""
+        entries: list[SourceStatusEntry] = []
+        for domain, sources in self._sources.items():
+            for s in sources:
+                available = await s.is_available()
+                if s.info.fetch_method == FetchMethod.MOCK:
+                    reason = "always_available"
+                elif available:
+                    reason = "configured"
+                elif s.info.fetch_method == FetchMethod.BROWSER:
+                    reason = "dependency_missing"
+                else:
+                    reason = "not_configured"
+                entries.append(SourceStatusEntry(
+                    name=s.info.name,
+                    domain=domain,
+                    fetch_method=s.info.fetch_method,
+                    price_types=s.info.price_types,
+                    available=available,
+                    reason=reason,
+                ))
+        return SourceStatus(sources=entries)

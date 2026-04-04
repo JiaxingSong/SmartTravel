@@ -199,28 +199,6 @@ def _setup_ticketmaster(env: dict[str, str]) -> None:
         print(_dim("  Skipped"))
 
 
-def _setup_seats_aero(env: dict[str, str]) -> None:
-    print(f"\n{_bold('━━━ seats.aero (Flights — Points/Miles Availability) ━━━')}")
-    print("Partner access: Requires application at seats.aero.")
-    print("Data: Award flight availability across loyalty programs.\n")
-
-    existing = env.get("SEATS_AERO_API_KEY", "")
-
-    open_url = input("Open seats.aero website in browser? [Y/n]: ").strip().lower()
-    if open_url != "n":
-        webbrowser.open("https://seats.aero/")
-        print(_dim("  Opened: https://seats.aero/"))
-
-    prompt = f"Partner API Key [{existing[:8]}...]" if existing else "Partner API Key (leave blank to skip)"
-    api_key = input(f"  {prompt}: ").strip() or existing
-
-    if api_key:
-        env["SEATS_AERO_API_KEY"] = api_key
-        print(_green("  ✓ Saved (no test validation available for partner API)"))
-    else:
-        print(_dim("  Skipped"))
-
-
 # ---------------------------------------------------------------------------
 # Summary
 # ---------------------------------------------------------------------------
@@ -230,7 +208,6 @@ def _print_summary(env: dict[str, str]) -> None:
 
     sources = [
         ("Amadeus (flights + hotels)", bool(env.get("AMADEUS_API_KEY") and env.get("AMADEUS_API_SECRET"))),
-        ("seats.aero (points flights)", bool(env.get("SEATS_AERO_API_KEY"))),
         ("Ticketmaster (events)", bool(env.get("TICKETMASTER_API_KEY"))),
         ("Google Flights (browser)", _playwright_available()),
         ("Google Hotels (browser)", _playwright_available()),
@@ -275,7 +252,6 @@ def main() -> None:
     try:
         _setup_amadeus(env)
         _setup_ticketmaster(env)
-        _setup_seats_aero(env)
     except (EOFError, KeyboardInterrupt):
         print("\n\nSetup cancelled.")
         sys.exit(1)

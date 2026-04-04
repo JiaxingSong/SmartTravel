@@ -2,11 +2,10 @@
 
 from __future__ import annotations
 
-import json
-
 from claude_agent_sdk import tool
 
 from smart_travel.data.resolver import search_hotels as _search
+from smart_travel.tools._formatting import format_tool_results
 
 
 @tool(
@@ -65,7 +64,7 @@ async def search_hotels_tool(args: dict) -> dict:
         "content": [
             {
                 "type": "text",
-                "text": json.dumps(results, indent=2),
+                "text": format_tool_results(results, "hotels"),
             }
         ]
     }

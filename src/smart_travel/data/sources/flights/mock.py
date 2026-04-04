@@ -24,7 +24,7 @@ class MockFlightSource(BaseFlightSource):
         name="mock",
         domain="flights",
         fetch_method=FetchMethod.MOCK,
-        price_types=frozenset({PriceType.CASH}),
+        price_types=frozenset({PriceType.CASH, PriceType.POINTS}),
         priority=999,
         airlines=frozenset(),
     )

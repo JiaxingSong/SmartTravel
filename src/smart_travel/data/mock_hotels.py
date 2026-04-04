@@ -24,6 +24,38 @@ BOUTIQUE_NAMES = [
     "Graduate Hotel", "Moxy", "Canopy by Hilton", "Aloft",
 ]
 
+HOTEL_LOYALTY_PROGRAMS: dict[str, str] = {
+    "Marriott": "marriott bonvoy",
+    "Sheraton": "marriott bonvoy",
+    "Westin": "marriott bonvoy",
+    "W Hotels": "marriott bonvoy",
+    "St. Regis": "marriott bonvoy",
+    "Fairmont": "marriott bonvoy",
+    "Ritz-Carlton": "marriott bonvoy",
+    "Hilton": "hilton honors",
+    "Conrad": "hilton honors",
+    "Hyatt": "world of hyatt",
+    "Park Hyatt": "world of hyatt",
+    "IHG": "ihg one rewards",
+    "Wyndham": "wyndham rewards",
+    "Best Western": "best western rewards",
+    "Accor": "accor live limitless",
+    "Radisson": "radisson rewards",
+    "Mandarin Oriental": "fans of mo",
+}
+
+_POINTS_PER_DOLLAR: dict[str, float] = {
+    "marriott bonvoy": 0.008,
+    "hilton honors": 0.0055,
+    "world of hyatt": 0.017,
+    "ihg one rewards": 0.0055,
+    "wyndham rewards": 0.009,
+    "best western rewards": 0.006,
+    "accor live limitless": 0.02,
+    "radisson rewards": 0.004,
+    "fans of mo": 0.01,
+}
+
 ALL_AMENITIES = [
     "wifi", "pool", "gym", "spa", "restaurant", "bar",
     "room_service", "parking", "airport_shuttle", "business_center",
@@ -71,8 +103,10 @@ def _generate_hotels(
 
         # Pick name
         if stars >= 4 and rng.random() < 0.6:
-            name = f"{rng.choice(HOTEL_CHAINS)} {city}"
+            chain = rng.choice(HOTEL_CHAINS)
+            name = f"{chain} {city}"
         else:
+            chain = None
             name = f"{rng.choice(BOUTIQUE_NAMES)} {city}"
 
         price_variation = rng.uniform(0.7, 1.5)
@@ -101,6 +135,18 @@ def _generate_hotels(
         city_neighborhoods = neighborhoods.get(city, ["Downtown", "City Center", "Old Town"])
         neighborhood = rng.choice(city_neighborhoods)
 
+        # Points pricing
+        program = HOTEL_LOYALTY_PROGRAMS.get(chain) if chain else None
+        if program:
+            cpp = _POINTS_PER_DOLLAR.get(program, 0.008) * rng.uniform(0.85, 1.15)
+            raw_points = price_per_night / cpp
+            if program == "wyndham rewards" and stars <= 4:
+                raw_points = 15000  # Wyndham flat-rate
+            points_price = int(round(raw_points / 1000) * 1000)  # round to nearest 1000
+        else:
+            points_price = None
+            program = None
+
         hotels.append({
             "name": name,
             "city": city,
@@ -119,6 +165,8 @@ def _generate_hotels(
                 "Free cancellation until 7 days before check-in",
             ]),
             "rooms_available": rng.randint(1, 15),
+            "points_price": points_price,
+            "points_program": program,
         })
 
     hotels.sort(key=lambda h: h["price_per_night_usd"])

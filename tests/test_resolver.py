@@ -6,6 +6,7 @@ import pytest
 
 from smart_travel.config import AppConfig
 from smart_travel.data.resolver import (
+    _merge_hotel_results,
     search_flights,
     search_hotels,
     search_tickets,
@@ -93,6 +94,67 @@ class TestHotelResolver:
         )
         for r in results:
             assert r["star_rating"] >= 4
+
+    @pytest.mark.anyio
+    async def test_hotel_results_include_points(self, no_keys_config: AppConfig):
+        """Resolver returns hotels with points pricing from mock."""
+        set_registry(SourceRegistry(no_keys_config))
+        results = await search_hotels("Tokyo", "2026-05-01", "2026-05-05")
+        has_points = [r for r in results if r.get("points_price") is not None]
+        assert len(has_points) > 0
+        for r in has_points:
+            assert isinstance(r["points_price"], int)
+            assert r["points_price"] > 0
+            assert isinstance(r["points_program"], str)
+
+
+class TestHotelMerge:
+    """Tests for _merge_hotel_results()."""
+
+    def test_cash_only_passthrough(self):
+        """Cash-only results pass through unchanged (sorted by price)."""
+        results = [
+            {"name": "Hotel B", "city": "Tokyo", "check_in": "2026-05-01",
+             "price_per_night_usd": 200.0, "points_price": None, "points_program": None},
+            {"name": "Hotel A", "city": "Tokyo", "check_in": "2026-05-01",
+             "price_per_night_usd": 100.0, "points_price": None, "points_program": None},
+        ]
+        merged = _merge_hotel_results(results)
+        assert len(merged) == 2
+        assert merged[0]["price_per_night_usd"] == 100.0
+        assert merged[1]["price_per_night_usd"] == 200.0
+
+    def test_merge_cash_and_points(self):
+        """Points-only result merges into matching cash result."""
+        cash = {
+            "name": "Marriott Tokyo", "city": "Tokyo", "check_in": "2026-05-01",
+            "price_per_night_usd": 200.0, "points_price": None, "points_program": None,
+        }
+        points_only = {
+            "name": "Marriott Tokyo", "city": "Tokyo", "check_in": "2026-05-01",
+            "price_per_night_usd": None, "points_price": 25000, "points_program": "marriott bonvoy",
+        }
+        merged = _merge_hotel_results([cash, points_only])
+        assert len(merged) == 1
+        assert merged[0]["price_per_night_usd"] == 200.0
+        assert merged[0]["points_price"] == 25000
+        assert merged[0]["points_program"] == "marriott bonvoy"
+
+    def test_unmatched_points_appended(self):
+        """Unmatched points-only results are appended to output."""
+        cash = {
+            "name": "Hilton Tokyo", "city": "Tokyo", "check_in": "2026-05-01",
+            "price_per_night_usd": 180.0, "points_price": None, "points_program": None,
+        }
+        points_only = {
+            "name": "Marriott Tokyo", "city": "Tokyo", "check_in": "2026-05-01",
+            "price_per_night_usd": None, "points_price": 25000, "points_program": "marriott bonvoy",
+        }
+        merged = _merge_hotel_results([cash, points_only])
+        assert len(merged) == 2
+        names = {r["name"] for r in merged}
+        assert "Hilton Tokyo" in names
+        assert "Marriott Tokyo" in names
 
 
 class TestTicketResolver:

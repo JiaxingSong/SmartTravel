@@ -20,6 +20,35 @@ AIRLINES = [
     "Air France", "KLM Royal Dutch Airlines", "Qantas",
 ]
 
+AIRLINE_LOYALTY_PROGRAMS: dict[str, str] = {
+    "United Airlines": "united mileageplus",
+    "Delta Air Lines": "delta skymiles",
+    "American Airlines": "aadvantage",
+    "Alaska Airlines": "alaska mileage plan",
+    "JetBlue Airways": "jetblue trueblue",
+    "Southwest Airlines": "southwest rapid rewards",
+    "Air Canada": "aeroplan",
+    "British Airways": "avios",
+    "Lufthansa": "miles & more",
+    "Emirates": "emirates skywards",
+    "Singapore Airlines": "krisflyer",
+    "ANA (All Nippon Airways)": "ana mileage club",
+    "Japan Airlines": "jal mileage bank",
+    "Cathay Pacific": "asia miles",
+    "Korean Air": "skypass",
+    "Turkish Airlines": "miles&smiles",
+    "Air France": "flying blue",
+    "KLM Royal Dutch Airlines": "flying blue",
+    "Qantas": "qantas frequent flyer",
+}
+
+POINTS_CLASS_MULTIPLIERS: dict[str, float] = {
+    "economy": 1.0,
+    "premium_economy": 1.4,
+    "business": 2.5,
+    "first": 4.0,
+}
+
 AIRPORTS: dict[str, list[str]] = {
     "Seattle": ["SEA"],
     "New York": ["JFK", "EWR", "LGA"],
@@ -139,6 +168,17 @@ def _generate_flights(
 
         flight_num = f"{airline[:2].upper()}{rng.randint(100, 9999)}"
 
+        # Points pricing
+        program = AIRLINE_LOYALTY_PROGRAMS.get(airline)
+        if program:
+            cpp = rng.uniform(0.01, 0.015)  # cents-per-point value
+            points_class_mult = POINTS_CLASS_MULTIPLIERS.get(cabin_class, 1.0)
+            raw_points = base_price * points_class_mult * price_variation * stop_discount / cpp
+            points_price = int(round(raw_points / 500) * 500)  # round to nearest 500
+        else:
+            points_price = None
+            program = None
+
         flights.append({
             "flight_number": flight_num,
             "airline": airline,
@@ -152,6 +192,8 @@ def _generate_flights(
             "stops": stops,
             "cabin_class": cabin_class,
             "price_usd": price,
+            "points_price": points_price,
+            "points_program": program,
             "seats_remaining": rng.randint(1, 42),
         })
 

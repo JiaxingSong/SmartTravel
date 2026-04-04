@@ -37,6 +37,11 @@ class TestMockFlightSource:
         assert src.info.fetch_method == FetchMethod.MOCK
         assert src.info.priority == 999
 
+    def test_info_includes_points_price_type(self):
+        src = MockFlightSource()
+        assert PriceType.CASH in src.info.price_types
+        assert PriceType.POINTS in src.info.price_types
+
     @pytest.mark.anyio
     async def test_max_price_filter(self):
         src = MockFlightSource()
@@ -85,6 +90,11 @@ class TestMockHotelSource:
         assert src.info.name == "mock"
         assert src.info.domain == "hotels"
         assert src.info.fetch_method == FetchMethod.MOCK
+
+    def test_info_includes_points_price_type(self):
+        src = MockHotelSource()
+        assert PriceType.CASH in src.info.price_types
+        assert PriceType.POINTS in src.info.price_types
 
 
 class TestMockTicketSource:

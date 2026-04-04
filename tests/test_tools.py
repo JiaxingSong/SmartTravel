@@ -4,8 +4,8 @@ from __future__ import annotations
 
 import pytest
 
-from smart_travel.data.mock_flights import search_flights
-from smart_travel.data.mock_hotels import search_hotels
+from smart_travel.data.mock_flights import search_flights, AIRLINE_LOYALTY_PROGRAMS
+from smart_travel.data.mock_hotels import search_hotels, HOTEL_LOYALTY_PROGRAMS
 from smart_travel.data.mock_tickets import search_tickets
 
 
@@ -93,6 +93,34 @@ class TestFlightSearch:
         )
         assert len(results) == 0
 
+    def test_flights_include_points_fields(self):
+        results = search_flights("Seattle", "Tokyo", "2026-05-01", seed=42)
+        for flight in results:
+            assert "points_price" in flight
+            assert "points_program" in flight
+            assert isinstance(flight["points_price"], int)
+            assert flight["points_price"] > 0
+            assert isinstance(flight["points_program"], str)
+            assert len(flight["points_program"]) > 0
+
+    def test_flight_points_scale_with_cabin_class(self):
+        economy = search_flights(
+            "Seattle", "Tokyo", "2026-05-01", cabin_class="economy", seed=42
+        )
+        business = search_flights(
+            "Seattle", "Tokyo", "2026-05-01", cabin_class="business", seed=42
+        )
+        avg_eco_pts = sum(f["points_price"] for f in economy) / len(economy)
+        avg_biz_pts = sum(f["points_price"] for f in business) / len(business)
+        assert avg_biz_pts > avg_eco_pts
+
+    def test_flight_points_reproducible(self):
+        r1 = search_flights("Seattle", "Tokyo", "2026-05-01", seed=42)
+        r2 = search_flights("Seattle", "Tokyo", "2026-05-01", seed=42)
+        for f1, f2 in zip(r1, r2):
+            assert f1["points_price"] == f2["points_price"]
+            assert f1["points_program"] == f2["points_program"]
+
 
 # ── Hotel search tests ───────────────────────────────────────────────
 
@@ -155,6 +183,50 @@ class TestHotelSearch:
         r1 = search_hotels("Tokyo", "2026-05-01", "2026-05-05", seed=42)
         r2 = search_hotels("Tokyo", "2026-05-01", "2026-05-05", seed=42)
         assert r1 == r2
+
+    def test_hotels_include_points_fields(self):
+        results = search_hotels("Tokyo", "2026-05-01", "2026-05-05", seed=42)
+        has_points = [h for h in results if h["points_price"] is not None]
+        has_none = [h for h in results if h["points_price"] is None]
+        # Should have at least some chain hotels with points
+        assert len(has_points) > 0
+        for hotel in has_points:
+            assert isinstance(hotel["points_price"], int)
+            assert hotel["points_price"] > 0
+            assert isinstance(hotel["points_program"], str)
+            assert len(hotel["points_program"]) > 0
+        # Some boutique hotels should have None
+        # (probabilistic — with seed=42 we expect at least one)
+        # Just verify fields exist on all results
+        for hotel in results:
+            assert "points_price" in hotel
+            assert "points_program" in hotel
+
+    def test_hotel_points_realistic_ranges(self):
+        results = search_hotels("Tokyo", "2026-05-01", "2026-05-05", seed=42)
+        for hotel in results:
+            if hotel["points_price"] is not None:
+                assert 1000 <= hotel["points_price"] <= 200000
+                assert hotel["points_price"] % 1000 == 0  # rounded to nearest 1000
+
+    def test_hotel_points_program_matches_chain(self):
+        results = search_hotels("Tokyo", "2026-05-01", "2026-05-05", seed=42)
+        for hotel in results:
+            if hotel["points_program"] is not None:
+                name = hotel["name"]
+                # Extract the chain from the hotel name (chain is the prefix before the city)
+                city = hotel["city"]
+                chain = name.replace(f" {city}", "").strip()
+                expected = HOTEL_LOYALTY_PROGRAMS.get(chain)
+                if expected is not None:
+                    assert hotel["points_program"] == expected
+
+    def test_hotel_points_reproducible(self):
+        r1 = search_hotels("Tokyo", "2026-05-01", "2026-05-05", seed=42)
+        r2 = search_hotels("Tokyo", "2026-05-01", "2026-05-05", seed=42)
+        for h1, h2 in zip(r1, r2):
+            assert h1["points_price"] == h2["points_price"]
+            assert h1["points_program"] == h2["points_program"]
 
 
 # ── Ticket search tests ─────────────────────────────────────────────

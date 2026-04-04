@@ -4,6 +4,15 @@ Reads API keys and settings from environment variables (with optional
 python-dotenv support). Each source has its own frozen dataclass config
 section with an ``is_configured`` property that checks whether the
 required keys are present.
+
+Environment variables read:
+- ``AMADEUS_API_KEY``, ``AMADEUS_API_SECRET``, ``AMADEUS_ENVIRONMENT``
+- ``TICKETMASTER_API_KEY``
+- ``BROWSER_HEADLESS``, ``BROWSER_TIMEOUT_MS``
+- ``CACHE_BACKEND``, ``CACHE_TTL_FLIGHTS``, ``CACHE_TTL_HOTELS``,
+  ``CACHE_TTL_TICKETS``, ``CACHE_MAX_ENTRIES``
+- ``MEMORY_BACKEND``
+- ``POSTGRES_DSN``
 """
 
 from __future__ import annotations
@@ -34,18 +43,6 @@ class AmadeusConfig:
     @property
     def is_configured(self) -> bool:
         return bool(self.api_key and self.api_secret)
-
-
-@dataclass(frozen=True)
-class SeatsAeroConfig:
-    """seats.aero Partner API credentials (flight award/points availability)."""
-
-    api_key: str = ""
-    base_url: str = "https://seats.aero/partnerapi"
-
-    @property
-    def is_configured(self) -> bool:
-        return bool(self.api_key)
 
 
 @dataclass(frozen=True)
@@ -107,7 +104,6 @@ class AppConfig:
     """Aggregated configuration for all data sources."""
 
     amadeus: AmadeusConfig = field(default_factory=AmadeusConfig)
-    seats_aero: SeatsAeroConfig = field(default_factory=SeatsAeroConfig)
     ticketmaster: TicketmasterConfig = field(default_factory=TicketmasterConfig)
     browser: BrowserConfig = field(default_factory=BrowserConfig)
     cache: CacheConfig = field(default_factory=CacheConfig)
@@ -130,28 +126,13 @@ def _try_load_dotenv() -> None:
 
 @lru_cache(maxsize=1)
 def load_config() -> AppConfig:
-    """Build an :class:`AppConfig` from environment variables.
-
-    Environment variables read:
-    - ``AMADEUS_API_KEY``, ``AMADEUS_API_SECRET``, ``AMADEUS_ENVIRONMENT``
-    - ``SEATS_AERO_API_KEY``
-    - ``TICKETMASTER_API_KEY``
-    - ``BROWSER_HEADLESS``, ``BROWSER_TIMEOUT_MS``
-    - ``CACHE_BACKEND``, ``CACHE_TTL_FLIGHTS``, ``CACHE_TTL_HOTELS``,
-      ``CACHE_TTL_TICKETS``, ``CACHE_MAX_ENTRIES``
-    - ``MEMORY_BACKEND``
-    - ``POSTGRES_DSN``
-    """
+    """Build an :class:`AppConfig` from environment variables."""
     _try_load_dotenv()
 
     amadeus = AmadeusConfig(
         api_key=os.environ.get("AMADEUS_API_KEY", ""),
         api_secret=os.environ.get("AMADEUS_API_SECRET", ""),
         environment=os.environ.get("AMADEUS_ENVIRONMENT", "test"),
-    )
-
-    seats_aero = SeatsAeroConfig(
-        api_key=os.environ.get("SEATS_AERO_API_KEY", ""),
     )
 
     ticketmaster = TicketmasterConfig(
@@ -181,10 +162,22 @@ def load_config() -> AppConfig:
 
     return AppConfig(
         amadeus=amadeus,
-        seats_aero=seats_aero,
         ticketmaster=ticketmaster,
         browser=browser,
         cache=cache,
         memory=memory,
         postgres=postgres,
     )
+
+
+async def get_source_status():
+    """Build a registry from current config and return source status.
+
+    Returns a :class:`~smart_travel.data.sources.registry.SourceStatus`
+    snapshot that describes which sources are available and why.
+    """
+    from smart_travel.data.sources.registry import SourceRegistry
+
+    config = load_config()
+    registry = SourceRegistry(config)
+    return await registry.source_status()

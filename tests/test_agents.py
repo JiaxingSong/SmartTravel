@@ -4,7 +4,14 @@ from __future__ import annotations
 
 import pytest
 
-from smart_travel.agents import create_travel_server, create_agent_options, SYSTEM_PROMPT
+from smart_travel.agents import (
+    create_travel_server,
+    create_agent_options,
+    _build_source_status_prompt,
+    SYSTEM_PROMPT,
+)
+from smart_travel.config import AppConfig
+from smart_travel.data.sources.registry import SourceRegistry
 
 
 class TestAgentSetup:
@@ -120,3 +127,30 @@ class TestToolExecution:
             "max_price": 0.01,  # impossibly low
         })
         assert "No events found" in result["content"][0]["text"]
+
+
+class TestDynamicPromptGeneration:
+    """Tests for dynamic system prompt generation from SourceStatus."""
+
+    @pytest.mark.anyio
+    async def test_build_source_status_prompt_returns_string(self):
+        config = AppConfig()
+        registry = SourceRegistry(config)
+        status = await registry.source_status()
+
+        result = _build_source_status_prompt(status)
+        assert isinstance(result, str)
+        assert len(result) > 0
+
+    @pytest.mark.anyio
+    async def test_agent_options_with_source_status(self):
+        config = AppConfig()
+        registry = SourceRegistry(config)
+        status = await registry.source_status()
+
+        section = _build_source_status_prompt(status)
+        options = create_agent_options(source_status_section=section)
+
+        assert options is not None
+        assert "Currently available data sources" in options.system_prompt
+        assert SYSTEM_PROMPT in options.system_prompt

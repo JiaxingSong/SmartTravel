@@ -133,6 +133,8 @@ async def search_flights(
                     origin, destination, departure_date, return_date,
                     cabin_class, passengers, max_price, max_stops,
                 )
+                for r in merged:
+                    r["_data_quality"] = "mock"
                 break
 
     # --- Cache store ---
@@ -162,6 +164,8 @@ async def _fetch_flights(
                 origin, destination, departure_date, return_date,
                 cabin_class, passengers, max_price, max_stops,
             )
+            for r in results:
+                r.setdefault("_data_quality", "live")
             collector.extend(results)
     except Exception:
         logger.warning(
@@ -211,6 +215,53 @@ def _merge_flight_results(results: list[dict[str, Any]]) -> list[dict[str, Any]]
             cash.extend(plist)
 
     cash.sort(key=lambda r: r.get("price_usd") or float("inf"))
+    return cash
+
+
+def _merge_hotel_results(results: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    """Merge cash and points hotel results by matching (check_in, name, city).
+
+    When a cash result and a points result share the same check-in date,
+    hotel name, and city, the points information is attached to the cash
+    result.  Standalone points-only results are appended separately.
+    """
+    cash: list[dict[str, Any]] = []
+    points: list[dict[str, Any]] = []
+
+    for r in results:
+        if r.get("points_price") is not None and r.get("price_per_night_usd") is None:
+            points.append(r)
+        else:
+            cash.append(r)
+
+    if not points:
+        cash.sort(key=lambda r: r.get("price_per_night_usd") or float("inf"))
+        return cash
+
+    # Index points by (check_in, name, city)
+    points_index: dict[tuple[str, str, str], list[dict[str, Any]]] = {}
+    for p in points:
+        key = (p.get("check_in", ""), p.get("name", ""), p.get("city", ""))
+        points_index.setdefault(key, []).append(p)
+
+    matched_keys: set[tuple[str, str, str]] = set()
+    for c in cash:
+        key = (c.get("check_in", ""), c.get("name", ""), c.get("city", ""))
+        if key in points_index:
+            best_points = min(
+                points_index[key],
+                key=lambda p: p.get("points_price") or float("inf"),
+            )
+            c["points_price"] = best_points.get("points_price")
+            c["points_program"] = best_points.get("points_program")
+            matched_keys.add(key)
+
+    # Append unmatched points-only results
+    for key, plist in points_index.items():
+        if key not in matched_keys:
+            cash.extend(plist)
+
+    cash.sort(key=lambda r: r.get("price_per_night_usd") or float("inf"))
     return cash
 
 
@@ -273,21 +324,24 @@ async def search_hotels(
                 )
 
     if all_results:
-        all_results.sort(key=lambda r: r.get("price_per_night_usd") or float("inf"))
+        merged = _merge_hotel_results(all_results)
         # --- Cache store ---
         ttl = load_config().cache.ttl_hotels
-        await cache.put(cache_key, "hotels", all_results, ttl)
-        return all_results
+        await cache.put(cache_key, "hotels", merged, ttl)
+        return merged
 
     # Fallback to mock
     if mock_sources:
         from smart_travel.data.sources.hotels.mock import MockHotelSource
         for ms in mock_sources:
             if isinstance(ms, MockHotelSource):
-                return await ms.search_hotels(
+                results = await ms.search_hotels(
                     city, check_in, check_out, guests, rooms,
                     min_stars, max_price_per_night, required_amenities,
                 )
+                for r in results:
+                    r["_data_quality"] = "mock"
+                return results
 
     return []
 
@@ -311,6 +365,8 @@ async def _fetch_hotels(
                 city, check_in, check_out, guests, rooms,
                 min_stars, max_price_per_night, required_amenities,
             )
+            for r in results:
+                r.setdefault("_data_quality", "live")
             collector.extend(results)
     except Exception:
         logger.warning(
@@ -383,10 +439,13 @@ async def search_tickets(
         from smart_travel.data.sources.tickets.mock import MockTicketSource
         for ms in mock_sources:
             if isinstance(ms, MockTicketSource):
-                return await ms.search_tickets(
+                results = await ms.search_tickets(
                     city, date_from, date_to, event_type,
                     max_price, min_rating,
                 )
+                for r in results:
+                    r["_data_quality"] = "mock"
+                return results
 
     return []
 
@@ -408,6 +467,8 @@ async def _fetch_tickets(
                 city, date_from, date_to, event_type,
                 max_price, min_rating,
             )
+            for r in results:
+                r.setdefault("_data_quality", "live")
             collector.extend(results)
     except Exception:
         logger.warning(

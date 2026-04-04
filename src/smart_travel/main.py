@@ -10,8 +10,8 @@ import sys
 import anyio
 from claude_agent_sdk import ClaudeSDKClient, AssistantMessage, TextBlock
 
-from smart_travel.agents import create_agent_options
-from smart_travel.config import load_config
+from smart_travel.agents import create_agent_options, _build_source_status_prompt
+from smart_travel.config import load_config, get_source_status
 from smart_travel.memory.session import Message
 from smart_travel.memory.store import MemoryStore, InMemoryMemoryStore
 
@@ -35,11 +35,40 @@ def _create_memory_store(config) -> MemoryStore:  # noqa: ANN001
     return InMemoryMemoryStore()
 
 
+async def _print_source_diagnostics(source_status) -> None:  # noqa: ANN001
+    """Print a startup diagnostics table showing data source availability."""
+    print("  Data source status:")
+    for entry in source_status.sources:
+        if entry.available:
+            mark = "\u2713"
+        else:
+            mark = "\u2717"
+        domains = f"[{entry.domain}]"
+        if entry.reason == "always_available":
+            detail = "always available (demo fallback)"
+        elif entry.reason == "configured":
+            detail = "configured"
+        elif entry.reason == "dependency_missing":
+            detail = "not configured (dependency missing)"
+        else:
+            detail = "not configured (API key missing)"
+        print(f"    {mark} {entry.name:<20s} {domains:<12s} \u2014 {detail}")
+    if not source_status.any_live_available:
+        print("\n  \u26a0  No live data sources configured \u2014 all results will be demo data.")
+    print()
+
+
 async def run_chat() -> None:
     """Run the interactive chat loop."""
     print(BANNER)
 
     config = load_config()
+
+    # Source diagnostics
+    status = await get_source_status()
+    await _print_source_diagnostics(status)
+    source_status_section = _build_source_status_prompt(status)
+
     memory = _create_memory_store(config)
     session = await memory.create_session()
 
@@ -50,7 +79,10 @@ async def run_chat() -> None:
     # Load preferences and build agent options
     preferences = await memory.get_all_preferences()
     preferences_section = preferences.to_prompt_section()
-    options = create_agent_options(preferences_section=preferences_section)
+    options = create_agent_options(
+        preferences_section=preferences_section,
+        source_status_section=source_status_section,
+    )
 
     async with ClaudeSDKClient(options=options) as client:
         while True:
