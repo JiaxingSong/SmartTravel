@@ -1,1 +1,1 @@
-"""Mock data generators for travel search."""
+"""Travel data layer (browser-based)."""

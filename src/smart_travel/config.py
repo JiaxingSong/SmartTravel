@@ -1,18 +1,15 @@
-"""Configuration for SmartTravel data sources.
+"""Configuration for SmartTravel.
 
-Reads API keys and settings from environment variables (with optional
-python-dotenv support). Each source has its own frozen dataclass config
-section with an ``is_configured`` property that checks whether the
-required keys are present.
+Reads settings from environment variables (with optional python-dotenv support).
 
-Environment variables read:
-- ``AMADEUS_API_KEY``, ``AMADEUS_API_SECRET``, ``AMADEUS_ENVIRONMENT``
-- ``TICKETMASTER_API_KEY``
-- ``BROWSER_HEADLESS``, ``BROWSER_TIMEOUT_MS``
-- ``CACHE_BACKEND``, ``CACHE_TTL_FLIGHTS``, ``CACHE_TTL_HOTELS``,
-  ``CACHE_TTL_TICKETS``, ``CACHE_MAX_ENTRIES``
-- ``MEMORY_BACKEND``
-- ``POSTGRES_DSN``
+Environment variables:
+- ANTHROPIC_API_KEY           (required, used by claude-agent-sdk implicitly)
+- BROWSER_HEADLESS            bool, default true
+- BROWSER_TIMEOUT_MS          int, default 30000
+- MONITOR_CHECK_INTERVAL      int minutes, default 5
+- CACHE_TTL                   int seconds, default 300
+- CACHE_MAX_ENTRIES           int, default 500
+- MEMORY_BACKEND              "memory" (only supported value)
 """
 
 from __future__ import annotations
@@ -22,98 +19,49 @@ from dataclasses import dataclass, field
 from functools import lru_cache
 
 
-# ---------------------------------------------------------------------------
-# Per-source configs
-# ---------------------------------------------------------------------------
-
-@dataclass(frozen=True)
-class AmadeusConfig:
-    """Amadeus API credentials (flights + hotels cash prices)."""
-
-    api_key: str = ""
-    api_secret: str = ""
-    environment: str = "test"  # "test" or "production"
-
-    @property
-    def base_url(self) -> str:
-        if self.environment == "production":
-            return "https://api.amadeus.com"
-        return "https://test.api.amadeus.com"
-
-    @property
-    def is_configured(self) -> bool:
-        return bool(self.api_key and self.api_secret)
-
-
-@dataclass(frozen=True)
-class TicketmasterConfig:
-    """Ticketmaster Discovery API credentials (event/ticket prices)."""
-
-    api_key: str = ""
-    base_url: str = "https://app.ticketmaster.com/discovery/v2"
-
-    @property
-    def is_configured(self) -> bool:
-        return bool(self.api_key)
-
-
 @dataclass(frozen=True)
 class BrowserConfig:
-    """Config for Playwright-based sources (V2+)."""
+    """Config for Playwright browser automation."""
 
     headless: bool = True
     timeout_ms: int = 30000
-    user_data_dir: str = ""  # Persist login sessions
 
 
 @dataclass(frozen=True)
 class CacheConfig:
-    """Cache layer configuration."""
+    """In-memory cache configuration."""
 
-    backend: str = "memory"        # "memory" or "postgres"
-    ttl_flights: int = 600         # 10 min
-    ttl_hotels: int = 1800         # 30 min
-    ttl_tickets: int = 1200        # 20 min
-    max_entries: int = 500         # in-memory only
+    ttl: int = 300          # seconds
+    max_entries: int = 500
 
 
 @dataclass(frozen=True)
 class MemoryConfig:
     """Agent memory / session persistence configuration."""
 
-    backend: str = "memory"        # "memory" or "postgres"
+    backend: str = "memory"
 
 
 @dataclass(frozen=True)
-class PostgresConfig:
-    """Shared PostgreSQL connection configuration."""
+class AccountConfig:
+    """Configuration for airline loyalty account storage and browser sessions."""
 
-    dsn: str = ""
+    store_path: str = ".smart_travel_accounts.json"
+    store_key: str = ""
+    session_dir: str = ".smart_travel_sessions"
+    session_max_age_hours: int = 12
 
-    @property
-    def is_configured(self) -> bool:
-        return bool(self.dsn)
-
-
-# ---------------------------------------------------------------------------
-# Top-level application config
-# ---------------------------------------------------------------------------
 
 @dataclass(frozen=True)
 class AppConfig:
-    """Aggregated configuration for all data sources."""
+    """Aggregated application configuration."""
 
-    amadeus: AmadeusConfig = field(default_factory=AmadeusConfig)
-    ticketmaster: TicketmasterConfig = field(default_factory=TicketmasterConfig)
     browser: BrowserConfig = field(default_factory=BrowserConfig)
     cache: CacheConfig = field(default_factory=CacheConfig)
     memory: MemoryConfig = field(default_factory=MemoryConfig)
-    postgres: PostgresConfig = field(default_factory=PostgresConfig)
+    account: AccountConfig = field(default_factory=AccountConfig)
+    monitor_check_interval: int = 5  # minutes
 
-
-# ---------------------------------------------------------------------------
-# Loader
-# ---------------------------------------------------------------------------
 
 def _try_load_dotenv() -> None:
     """Attempt to load a .env file if python-dotenv is installed."""
@@ -129,26 +77,13 @@ def load_config() -> AppConfig:
     """Build an :class:`AppConfig` from environment variables."""
     _try_load_dotenv()
 
-    amadeus = AmadeusConfig(
-        api_key=os.environ.get("AMADEUS_API_KEY", ""),
-        api_secret=os.environ.get("AMADEUS_API_SECRET", ""),
-        environment=os.environ.get("AMADEUS_ENVIRONMENT", "test"),
-    )
-
-    ticketmaster = TicketmasterConfig(
-        api_key=os.environ.get("TICKETMASTER_API_KEY", ""),
-    )
-
     browser = BrowserConfig(
         headless=os.environ.get("BROWSER_HEADLESS", "true").lower() == "true",
         timeout_ms=int(os.environ.get("BROWSER_TIMEOUT_MS", "30000")),
     )
 
     cache = CacheConfig(
-        backend=os.environ.get("CACHE_BACKEND", "memory"),
-        ttl_flights=int(os.environ.get("CACHE_TTL_FLIGHTS", "600")),
-        ttl_hotels=int(os.environ.get("CACHE_TTL_HOTELS", "1800")),
-        ttl_tickets=int(os.environ.get("CACHE_TTL_TICKETS", "1200")),
+        ttl=int(os.environ.get("CACHE_TTL", "300")),
         max_entries=int(os.environ.get("CACHE_MAX_ENTRIES", "500")),
     )
 
@@ -156,28 +91,17 @@ def load_config() -> AppConfig:
         backend=os.environ.get("MEMORY_BACKEND", "memory"),
     )
 
-    postgres = PostgresConfig(
-        dsn=os.environ.get("POSTGRES_DSN", ""),
+    account = AccountConfig(
+        store_path=os.environ.get("ACCOUNT_STORE_PATH", ".smart_travel_accounts.json"),
+        store_key=os.environ.get("ACCOUNT_STORE_KEY", ""),
+        session_dir=os.environ.get("SESSION_DIR", ".smart_travel_sessions"),
+        session_max_age_hours=int(os.environ.get("SESSION_MAX_AGE_HOURS", "12")),
     )
 
     return AppConfig(
-        amadeus=amadeus,
-        ticketmaster=ticketmaster,
         browser=browser,
         cache=cache,
         memory=memory,
-        postgres=postgres,
+        account=account,
+        monitor_check_interval=int(os.environ.get("MONITOR_CHECK_INTERVAL", "5")),
     )
-
-
-async def get_source_status():
-    """Build a registry from current config and return source status.
-
-    Returns a :class:`~smart_travel.data.sources.registry.SourceStatus`
-    snapshot that describes which sources are available and why.
-    """
-    from smart_travel.data.sources.registry import SourceRegistry
-
-    config = load_config()
-    registry = SourceRegistry(config)
-    return await registry.source_status()

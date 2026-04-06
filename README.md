@@ -1,38 +1,51 @@
 # SmartTravel
 
-AI-powered travel search agent built with the [Claude Agent SDK](https://pypi.org/project/claude-agent-sdk/).
+A locally-deployed personal AI travel agent built with the
+[Claude Agent SDK](https://pypi.org/project/claude-agent-sdk/) and
+[Playwright](https://playwright.dev/) browser automation.
 
-SmartTravel lets you search for flights, hotels, and event tickets through natural language conversations. Ask questions like "Find me flights from Seattle to Tokyo next month under $800" and get formatted, relevant results.
+SmartTravel acts like a knowledgeable friend who opens a browser and searches travel sites on
+your behalf — Google Flights, Kayak, Booking.com, airline sites, and more. No travel API keys
+required beyond your Anthropic key.
 
 ## Features
 
-- **Flight search** — Filter by origin/destination, dates, cabin class, passengers, price range, number of stops
-- **Hotel search** — Filter by city, dates, guests, star rating, price range, amenities
-- **Event/ticket search** — Filter by city, event type (concert/sports/theater/museum), date range, price range
-- **Multi-turn conversations** — Refine searches, compare options, ask follow-up questions
-- **Mock data (swappable)** — Ships with realistic mock data; swap in real APIs (Amadeus, SerpAPI, etc.) by changing one import
+- **Natural language travel search** — ask anything: "Find flights from Seattle to Tokyo next
+  month under $800", "What hotels near the Eiffel Tower have pools?"
+- **Multi-site comparison** — SmartTravel searches multiple sites and summarises the best options.
+- **Proactive price monitoring** — say "watch this flight and alert me if it drops below $400"
+  and SmartTravel checks in the background and alerts you on your next message.
+- **Remembers your preferences** — home city, preferred airlines, cabin class, budget range, and
+  more persist across sessions.
+- **Runs entirely on your machine** — no servers, no databases, no data aggregation.
 
 ## Quick Start
 
 ```bash
-pip install -e .
+pip install -e ".[live]"
+playwright install chromium
+cp .env.example .env
+# Edit .env and set ANTHROPIC_API_KEY
 python -m smart_travel
 ```
 
-Then type natural language queries:
+## Usage
 
 ```
 You: Find me flights from Seattle to Tokyo next month under $800
-You: What hotels are available in Tokyo with a pool?
-You: Any concerts happening in Tokyo this weekend?
+You: What hotels in Tokyo are near Shinjuku with a pool?
+You: Watch this flight and alert me if the price drops below $650
 ```
+
+## Requirements
+
+- Python 3.10+
+- Anthropic API key (`ANTHROPIC_API_KEY`)
+- Playwright (installed above)
 
 ## Architecture
 
-- `src/smart_travel/data/` — Mock data generators (swap for real API clients)
-- `src/smart_travel/tools/` — MCP tool definitions (`@tool` decorated)
-- `src/smart_travel/agents.py` — Agent configuration with system prompt
-- `src/smart_travel/main.py` — Interactive CLI entry point
+See [CLAUDE.md](./CLAUDE.md) for developer documentation.
 
 ## Running Tests
 

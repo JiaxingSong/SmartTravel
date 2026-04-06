@@ -1,9 +1,4 @@
-"""TTL cache layer for search results.
-
-Provides in-memory caching by default with optional PostgreSQL persistence.
-The cache sits in the resolver before source fan-out to avoid redundant
-API/browser calls.
-"""
+"""TTL cache layer for browser search results."""
 
 from smart_travel.cache.keys import make_cache_key
 from smart_travel.cache.store import CacheStore, InMemoryCacheStore

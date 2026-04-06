@@ -33,3 +33,8 @@ htmlcov/
 
 # Playwright MCP local data
 .playwright-mcp/
+
+# Award account credentials and browser sessions (sensitive)
+.smart_travel_accounts.json
+.smart_travel_sessions/
+.smart_travel_email.json

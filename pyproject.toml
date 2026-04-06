@@ -4,40 +4,34 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "smart-travel"
-version = "0.2.0"
-description = "SmartTravel - AI-powered travel search agent using Claude Agent SDK"
+version = "0.3.0"
+description = "SmartTravel - Personal AI travel agent using browser automation and Claude Agent SDK"
 readme = "README.md"
 requires-python = ">=3.10"
 dependencies = [
     "claude-agent-sdk",
     "anyio",
-    "httpx>=0.27",
+    "playwright>=1.40",
 ]
 
 [project.optional-dependencies]
 dev = [
     "pytest",
     "pytest-asyncio",
-    "respx>=0.21",
-]
-browser = [
-    "playwright>=1.40",
-]
-postgres = [
-    "asyncpg>=0.29",
 ]
 live = [
     "python-dotenv>=1.0",
 ]
+browser = [
+    "playwright-stealth>=1.0",
+]
 all = [
     "python-dotenv>=1.0",
-    "playwright>=1.40",
-    "asyncpg>=0.29",
+    "playwright-stealth>=1.0",
 ]
 
 [project.scripts]
 smart-travel = "smart_travel.main:main"
-smart-travel-setup = "smart_travel.setup:main"
 
 [tool.setuptools.packages.find]
 where = ["src"]

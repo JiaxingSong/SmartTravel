@@ -1,156 +1,44 @@
-"""Integration tests for agent setup and tool registration."""
-
+"""Tests for the browser-agent setup in agents.py."""
 from __future__ import annotations
 
-import pytest
-
-from smart_travel.agents import (
-    create_travel_server,
-    create_agent_options,
-    _build_source_status_prompt,
-    SYSTEM_PROMPT,
-)
-from smart_travel.config import AppConfig
-from smart_travel.data.sources.registry import SourceRegistry
+from smart_travel.agents import create_agent_options, SYSTEM_PROMPT
 
 
-class TestAgentSetup:
-    """Tests for agent configuration."""
-
-    def test_system_prompt_is_non_empty(self):
+class TestSystemPrompt:
+    def test_non_empty(self) -> None:
         assert len(SYSTEM_PROMPT) > 100
 
-    def test_system_prompt_mentions_tools(self):
-        assert "search_flights" in SYSTEM_PROMPT
-        assert "search_hotels" in SYSTEM_PROMPT
-        assert "search_tickets" in SYSTEM_PROMPT
-        assert "save_preference" in SYSTEM_PROMPT
-        assert "get_preferences" in SYSTEM_PROMPT
+    def test_mentions_browser_tools(self) -> None:
+        assert "web_search" in SYSTEM_PROMPT
+        assert "open_page" in SYSTEM_PROMPT
+        assert "fill_form" in SYSTEM_PROMPT
+        assert "monitor_price" in SYSTEM_PROMPT
 
-    def test_create_travel_server_returns_server(self):
-        server = create_travel_server()
-        assert server is not None
+    def test_does_not_mention_old_tools(self) -> None:
+        assert "search_flights" not in SYSTEM_PROMPT
+        assert "search_hotels" not in SYSTEM_PROMPT
+        assert "search_tickets" not in SYSTEM_PROMPT
+        assert "Amadeus" not in SYSTEM_PROMPT
+        assert "Ticketmaster" not in SYSTEM_PROMPT
+        assert "_data_quality" not in SYSTEM_PROMPT
 
-    def test_create_agent_options_returns_options(self):
+    def test_mentions_travel_sites(self) -> None:
+        assert "Kayak" in SYSTEM_PROMPT or "Google Flights" in SYSTEM_PROMPT
+
+
+class TestCreateAgentOptions:
+    def test_returns_options(self) -> None:
         options = create_agent_options()
         assert options is not None
-        assert options.system_prompt == SYSTEM_PROMPT
+
+    def test_mcp_server_registered(self) -> None:
+        options = create_agent_options()
         assert "travel" in options.mcp_servers
 
+    def test_preferences_section_appended(self) -> None:
+        options = create_agent_options(preferences_section="## Prefs\n- home: Seattle")
+        assert "home: Seattle" in options.system_prompt
 
-class TestToolImports:
-    """Tests that tool modules can be imported correctly."""
-
-    def test_import_flights_tool(self):
-        from smart_travel.tools.flights import search_flights_tool
-        assert search_flights_tool is not None
-
-    def test_import_hotels_tool(self):
-        from smart_travel.tools.hotels import search_hotels_tool
-        assert search_hotels_tool is not None
-
-    def test_import_tickets_tool(self):
-        from smart_travel.tools.tickets import search_tickets_tool
-        assert search_tickets_tool is not None
-
-
-class TestToolExecution:
-    """Tests that tool handler functions can be called directly."""
-
-    @pytest.mark.anyio
-    async def test_flights_tool_returns_content(self):
-        from smart_travel.tools.flights import search_flights_tool
-        result = await search_flights_tool.handler({
-            "origin": "Seattle",
-            "destination": "Tokyo",
-            "departure_date": "2026-05-01",
-        })
-        assert "content" in result
-        assert len(result["content"]) > 0
-        assert result["content"][0]["type"] == "text"
-        assert len(result["content"][0]["text"]) > 0
-
-    @pytest.mark.anyio
-    async def test_hotels_tool_returns_content(self):
-        from smart_travel.tools.hotels import search_hotels_tool
-        result = await search_hotels_tool.handler({
-            "city": "Tokyo",
-            "check_in": "2026-05-01",
-            "check_out": "2026-05-05",
-        })
-        assert "content" in result
-        assert len(result["content"]) > 0
-        assert result["content"][0]["type"] == "text"
-
-    @pytest.mark.anyio
-    async def test_tickets_tool_returns_content(self):
-        from smart_travel.tools.tickets import search_tickets_tool
-        result = await search_tickets_tool.handler({
-            "city": "Tokyo",
-            "date_from": "2026-05-01",
-            "date_to": "2026-05-10",
-        })
-        assert "content" in result
-        assert len(result["content"]) > 0
-        assert result["content"][0]["type"] == "text"
-
-    @pytest.mark.anyio
-    async def test_flights_tool_no_results(self):
-        from smart_travel.tools.flights import search_flights_tool
-        result = await search_flights_tool.handler({
-            "origin": "Seattle",
-            "destination": "Tokyo",
-            "departure_date": "2026-05-01",
-            "max_price": 1.0,  # impossibly low
-        })
-        assert "No flights found" in result["content"][0]["text"]
-
-    @pytest.mark.anyio
-    async def test_hotels_tool_no_results(self):
-        from smart_travel.tools.hotels import search_hotels_tool
-        result = await search_hotels_tool.handler({
-            "city": "Tokyo",
-            "check_in": "2026-05-01",
-            "check_out": "2026-05-05",
-            "max_price_per_night": 1.0,  # impossibly low
-            "min_stars": 5,
-        })
-        assert "No hotels found" in result["content"][0]["text"]
-
-    @pytest.mark.anyio
-    async def test_tickets_tool_no_results(self):
-        from smart_travel.tools.tickets import search_tickets_tool
-        result = await search_tickets_tool.handler({
-            "city": "Tokyo",
-            "date_from": "2026-05-01",
-            "date_to": "2026-05-10",
-            "max_price": 0.01,  # impossibly low
-        })
-        assert "No events found" in result["content"][0]["text"]
-
-
-class TestDynamicPromptGeneration:
-    """Tests for dynamic system prompt generation from SourceStatus."""
-
-    @pytest.mark.anyio
-    async def test_build_source_status_prompt_returns_string(self):
-        config = AppConfig()
-        registry = SourceRegistry(config)
-        status = await registry.source_status()
-
-        result = _build_source_status_prompt(status)
-        assert isinstance(result, str)
-        assert len(result) > 0
-
-    @pytest.mark.anyio
-    async def test_agent_options_with_source_status(self):
-        config = AppConfig()
-        registry = SourceRegistry(config)
-        status = await registry.source_status()
-
-        section = _build_source_status_prompt(status)
-        options = create_agent_options(source_status_section=section)
-
-        assert options is not None
-        assert "Currently available data sources" in options.system_prompt
-        assert SYSTEM_PROMPT in options.system_prompt
+    def test_no_preferences_section_clean_prompt(self) -> None:
+        options = create_agent_options()
+        assert options.system_prompt == SYSTEM_PROMPT
