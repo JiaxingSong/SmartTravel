@@ -870,6 +870,144 @@ _AIRLINE_SEARCH_FNS = {
 
 
 # ---------------------------------------------------------------------------
+# Flight schedule scraping
+# ---------------------------------------------------------------------------
+
+@dataclass
+class FlightInfo:
+    """A specific flight with schedule and cash price."""
+    operating_airline: str   # canonical key: "united"
+    flight_number: str       # "UA 1234"
+    departure: str           # "7:05 AM"
+    arrival: str             # "1:31 PM"
+    duration: str            # "4h 26m"
+    stops: str               # "Nonstop" or "1 stop (DEN)"
+    cash_price_usd: float    # 224.00
+
+    def to_dict(self) -> dict:
+        return {
+            "airline": self.operating_airline,
+            "flight": self.flight_number,
+            "depart": self.departure,
+            "arrive": self.arrival,
+            "duration": self.duration,
+            "stops": self.stops,
+            "cash": self.cash_price_usd,
+        }
+
+
+async def _scrape_flight_schedule(
+    origin: str, dest: str, date: str
+) -> list[FlightInfo]:
+    """Scrape actual flight schedules from Kayak for a route/date.
+
+    Returns a list of FlightInfo with real flight numbers, times, and cash prices.
+    """
+    from smart_travel.tools.browser import open_page_tool
+    from smart_travel.data.alliances import normalize_airline, IATA_TO_KEY
+
+    url = f"https://www.kayak.com/flights/{origin}-{dest}/{date}?sort=price_a"
+    try:
+        result = await open_page_tool.handler({"url": url})
+        text = result.get("content", [{}])[0].get("text", "")
+    except Exception:
+        logger.warning("Flight schedule scrape failed", exc_info=True)
+        return []
+
+    if not text or len(text) < 100:
+        return []
+
+    flights: list[FlightInfo] = []
+    lines = text.split("\n")
+
+    # Parse Kayak text output — look for patterns like:
+    # "7:05 AM – 1:31 PM"  "United"  "Nonstop"  "4h 26m"  "$224"
+    i = 0
+    while i < len(lines):
+        line = lines[i].strip()
+
+        # Look for time pattern: "HH:MM AM/PM – HH:MM AM/PM" or similar
+        time_match = re.search(
+            r"(\d{1,2}:\d{2}\s*[ap]m)\s*[–\-]\s*(\d{1,2}:\d{2}\s*[ap]m)",
+            line, re.I,
+        )
+        if time_match:
+            depart = time_match.group(1).strip()
+            arrive = time_match.group(2).strip()
+
+            # Search nearby lines for airline, duration, stops, price
+            context = " ".join(lines[max(0, i-2):min(len(lines), i+5)])
+
+            # Airline detection
+            airline_key = ""
+            for name, key in [
+                ("United", "united"), ("Delta", "delta"), ("American", "american"),
+                ("Alaska", "alaska"), ("Southwest", "southwest"), ("Frontier", "frontier"),
+                ("Spirit", "spirit"), ("JetBlue", "jetblue"),
+                ("ANA", "ana"), ("JAL", "jal"), ("Cathay", "cathay"),
+                ("British Airways", "british_airways"), ("Lufthansa", "lufthansa"),
+                ("Air France", "air_france"), ("Turkish", "turkish"),
+                ("Korean Air", "korean_air"), ("Singapore", "singapore"),
+            ]:
+                if name.lower() in context.lower():
+                    airline_key = key
+                    break
+
+            # Flight number
+            fn_match = re.search(
+                r"\b([A-Z]{2})\s*(\d{1,4})\b", context,
+            )
+            flight_num = f"{fn_match.group(1)} {fn_match.group(2)}" if fn_match else ""
+
+            # If no flight number but have airline, use IATA code
+            if not flight_num and airline_key:
+                from smart_travel.data.alliances import AIRLINE_INFO
+                iata = AIRLINE_INFO.get(airline_key, {}).get("iata", "")
+                if iata:
+                    flight_num = f"{iata} ---"
+
+            # Duration
+            dur_match = re.search(r"(\d+h\s*\d+m|\d+h)", context, re.I)
+            duration = dur_match.group(0) if dur_match else ""
+
+            # Stops
+            stops = "Nonstop"
+            if re.search(r"1\s*stop", context, re.I):
+                stop_via = re.search(r"1\s*stop\s*\(([^)]+)\)", context, re.I)
+                stops = f"1 stop ({stop_via.group(1)})" if stop_via else "1 stop"
+            elif re.search(r"2\s*stop", context, re.I):
+                stops = "2 stops"
+
+            # Cash price
+            price_match = re.search(r"\$(\d[\d,]*)", context)
+            cash = float(price_match.group(1).replace(",", "")) if price_match else 0.0
+
+            if airline_key and (depart or arrive):
+                flights.append(FlightInfo(
+                    operating_airline=airline_key,
+                    flight_number=flight_num,
+                    departure=depart,
+                    arrival=arrive,
+                    duration=duration,
+                    stops=stops,
+                    cash_price_usd=cash,
+                ))
+
+        i += 1
+
+    # Deduplicate by departure time + airline
+    seen = set()
+    unique: list[FlightInfo] = []
+    for f in flights:
+        key = (f.operating_airline, f.departure)
+        if key not in seen:
+            seen.add(key)
+            unique.append(f)
+
+    return unique[:15]  # cap at 15 flights
+
+
+# ---------------------------------------------------------------------------
 # Top-level MCP tool
 # ---------------------------------------------------------------------------
 
@@ -923,28 +1061,43 @@ async def search_awards_tool(args: dict) -> dict:
     except ValueError:
         pass  # unparseable date — let it through, search may still work
 
-    # Step 1: Find flights and their cash prices
+    # Step 1: Scrape actual flight schedules (times, prices, flight numbers)
     from smart_travel.data.alliances import classify_route, normalize_airline
     from smart_travel.data.award_charts import get_redemption_options as get_options
 
     route_region = classify_route(origin, destination)
+    scraped_flights = await _scrape_flight_schedule(origin, destination, date)
+
+    # Also ensure major carriers are included even if not found by scraper
     airlines = await _find_airlines_for_route(origin, destination, date)
 
-    # Step 2: For each airline, generate redemption options
-    # We use a typical cash price estimate per airline/route for cpp calculation
-    # (agent can refine with actual scraped prices)
+    # Step 2: Build M×N matrix — each scraped flight × redemption options
     flight_results: list[dict] = []
-    for airline in airlines:
-        airline_key = normalize_airline(airline)
-        # Skip airlines without chart data
-        options = get_options(airline_key, cabin, route_region, cash_price_usd=250.0)
-        if not options:
-            continue
 
-        flight_results.append({
-            "airline": airline_key,
-            "redemptions": options,
-        })
+    if scraped_flights:
+        # Use real flight data
+        for flight in scraped_flights:
+            options = get_options(
+                flight.operating_airline, cabin, route_region,
+                cash_price_usd=flight.cash_price_usd,
+            )
+            if options:
+                flight_results.append({
+                    "flight": flight,
+                    "airline": flight.operating_airline,
+                    "redemptions": options,
+                })
+    else:
+        # Fallback: no scraped data, use airline-level estimates
+        for airline in airlines:
+            airline_key = normalize_airline(airline)
+            options = get_options(airline_key, cabin, route_region, cash_price_usd=250.0)
+            if options:
+                flight_results.append({
+                    "flight": None,
+                    "airline": airline_key,
+                    "redemptions": options,
+                })
 
     # Step 3: Format
     return {"content": [{"type": "text", "text": _format_mn_results(
@@ -960,7 +1113,7 @@ def _format_mn_results(
     cabin: str,
     route_region: str,
 ) -> str:
-    """Format the M×N matrix as nested tables."""
+    """Format the M×N matrix as nested tables with flight details."""
     from smart_travel.data.alliances import AIRLINE_INFO
 
     lines = [f"Award prices: {origin} -> {dest} on {date} ({cabin.title()}, {route_region})\n"]
@@ -969,7 +1122,7 @@ def _format_mn_results(
         lines.append("No flights found for this route.")
         return "\n".join(lines)
 
-    lines.append(f"{len(flight_results)} airline(s) found on this route.\n")
+    lines.append(f"{len(flight_results)} flight(s) found.\n")
 
     for i, fr in enumerate(flight_results, 1):
         airline_key = fr["airline"]
@@ -977,26 +1130,36 @@ def _format_mn_results(
         airline_name = info.get("name", airline_key.title())
         iata = info.get("iata", "")
         redemptions = fr["redemptions"]
+        flight = fr.get("flight")
 
-        lines.append(f"### Flight option {i}: {airline_name} ({iata})")
+        # Flight header with schedule details
+        if flight and isinstance(flight, FlightInfo):
+            fn = flight.flight_number or f"{iata} ---"
+            lines.append(
+                f"### Flight {i}: {airline_name} {fn} | "
+                f"{flight.departure} -> {flight.arrival} | "
+                f"{flight.duration} | {flight.stops} | "
+                f"${flight.cash_price_usd:.0f} cash"
+            )
+        else:
+            lines.append(f"### Flight {i}: {airline_name} ({iata})")
 
         if not redemptions:
             lines.append("  No award redemption options available.\n")
             continue
 
         lines.append("")
-        lines.append("| # | Program | Miles (saver) | Miles (peak) | Type | Dynamic | Transfer From | Notes |")
-        lines.append("|---|---------|--------------|-------------|------|---------|---------------|-------|")
+        lines.append("| # | Program | Miles (saver) | Miles (peak) | cpp | Type | Transfer From |")
+        lines.append("|---|---------|--------------|-------------|-----|------|---------------|")
 
-        for j, r in enumerate(redemptions[:10], 1):  # cap at 10 per flight
+        for j, r in enumerate(redemptions[:8], 1):  # cap at 8 per flight
             transfers = ", ".join(r.transfer_partners[:3]) if r.transfer_partners else "-"
             if len(r.transfer_partners) > 3:
                 transfers += f" +{len(r.transfer_partners) - 3}"
-            dyn = "yes" if r.is_dynamic else "no"
+            cpp_str = f"{r.cents_per_mile:.1f}c" if r.cents_per_mile > 0 else "-"
             lines.append(
                 f"| {j} | {r.program_name} | {r.miles_required:,} | "
-                f"{r.miles_high:,} | {r.booking_type} | {dyn} | "
-                f"{transfers} | {r.notes} |"
+                f"{r.miles_high:,} | {cpp_str} | {r.booking_type} | {transfers} |"
             )
 
         lines.append("")
@@ -1004,22 +1167,26 @@ def _format_mn_results(
     # Summary: best overall values
     all_options = []
     for fr in flight_results:
+        flight = fr.get("flight")
         for r in fr["redemptions"]:
-            all_options.append((fr["airline"], r))
+            all_options.append((fr["airline"], flight, r))
 
     if all_options:
-        all_options.sort(key=lambda x: x[1].miles_required)
+        all_options.sort(key=lambda x: x[2].miles_required)
         lines.append("### Best redemption values (lowest miles across all flights):\n")
         seen = set()
-        for airline_key, r in all_options[:5]:
-            key = r.program_name
+        for airline_key, flight, r in all_options[:5]:
+            key = (r.program_name, airline_key)
             if key in seen:
                 continue
             seen.add(key)
             info = AIRLINE_INFO.get(airline_key, {})
             transfers = ", ".join(r.transfer_partners[:2]) if r.transfer_partners else "-"
+            flight_desc = ""
+            if flight and isinstance(flight, FlightInfo):
+                flight_desc = f" ({flight.flight_number} {flight.departure})"
             lines.append(
-                f"- **{r.program_name}** on {info.get('name', airline_key.title())}: "
+                f"- **{r.program_name}** on {info.get('name', airline_key.title())}{flight_desc}: "
                 f"{r.miles_required:,} miles ({r.booking_type})"
                 f"{' via ' + transfers if transfers != '-' else ''}"
             )
