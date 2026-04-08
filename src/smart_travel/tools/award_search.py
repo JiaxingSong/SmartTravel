@@ -910,6 +910,19 @@ async def search_awards_tool(args: dict) -> dict:
 
     date = _normalize_date(date_raw)
 
+    # Validate date is not in the past
+    try:
+        from datetime import date as date_type
+        parsed = datetime.strptime(date, "%Y-%m-%d").date()
+        if parsed < date_type.today():
+            return {"content": [{"type": "text", "text": (
+                f"Error: The date {date_raw} is in the past. "
+                f"Today is {date_type.today().isoformat()}. "
+                f"Please provide a future date for award search."
+            )}]}
+    except ValueError:
+        pass  # unparseable date — let it through, search may still work
+
     # Step 1: Find flights and their cash prices
     from smart_travel.data.alliances import classify_route, normalize_airline
     from smart_travel.data.award_charts import get_redemption_options as get_options
