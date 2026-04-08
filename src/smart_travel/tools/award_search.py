@@ -870,6 +870,90 @@ _AIRLINE_SEARCH_FNS = {
 
 
 # ---------------------------------------------------------------------------
+# seats.aero integration helpers
+# ---------------------------------------------------------------------------
+
+_PROGRAM_AIRLINE_MAP: dict[str, str] = {
+    "United": "united", "Alaska": "alaska", "Delta": "delta",
+    "American": "american", "Aeroplan": "air_canada",
+    "LifeMiles": "avianca", "ANA": "ana", "JAL": "jal",
+    "Cathay Pacific": "cathay", "Singapore": "singapore",
+    "Korean Air": "korean_air", "British Airways": "british_airways",
+    "Turkish": "turkish", "Lufthansa": "lufthansa",
+    "Air France": "air_france", "KLM": "air_france",
+    "Virgin Atlantic": "virgin_atlantic", "Qantas": "qantas",
+    "Iberia": "iberia", "Finnair": "finnair", "SAS": "sas",
+    "TAP": "tap", "Velocity": "virgin_atlantic",
+    "Azul": "azul", "Emirates": "emirates", "Etihad": "etihad",
+    "SWISS": "swiss", "Austrian": "austrian",
+    "EVA Air": "eva", "Thai": "thai", "Malaysia": "malaysia",
+}
+
+
+def _program_to_airline_key(program_name: str) -> str:
+    """Map a seats.aero program name to our canonical airline key."""
+    return _PROGRAM_AIRLINE_MAP.get(program_name, program_name.lower().replace(" ", "_"))
+
+
+def _match_program_to_airline(program_name: str, airline_key: str) -> bool:
+    """Check if a seats.aero program can book flights on this airline."""
+    prog_key = _program_to_airline_key(program_name)
+    if prog_key == airline_key:
+        return True
+    # Check alliance — same alliance programs can book each other
+    from smart_travel.data.alliances import get_alliance
+    return get_alliance(prog_key) == get_alliance(airline_key) and get_alliance(airline_key) != "independent"
+
+
+def _seats_to_redemptions(
+    seats_results: list,
+    cabin: str,
+    cash_price: float,
+) -> list:
+    """Convert seats.aero results to RedemptionOption format."""
+    from smart_travel.data.award_charts import RedemptionOption
+    from smart_travel.data.alliances import get_transfer_sources
+
+    options = []
+    for sr in seats_results:
+        # Pick the right cabin's points
+        if cabin == "first" and sr.first_pts > 0:
+            pts = sr.first_pts
+        elif cabin == "business" and sr.business_pts > 0:
+            pts = sr.business_pts
+        elif cabin == "premium_economy" and sr.premium_pts > 0:
+            pts = sr.premium_pts
+        elif sr.economy_pts > 0:
+            pts = sr.economy_pts
+        else:
+            # Show whatever is available
+            pts = sr.economy_pts or sr.business_pts or sr.first_pts or sr.premium_pts
+            if pts == 0:
+                continue
+
+        prog_key = _program_to_airline_key(sr.program)
+        cpp = round(cash_price / pts * 100, 1) if pts > 0 and cash_price > 0 else 0.0
+        transfers = get_transfer_sources(prog_key)
+
+        options.append(RedemptionOption(
+            program_name=sr.program,
+            program_airline=prog_key,
+            miles_required=pts,
+            miles_high=pts,  # real price = exact, not a range
+            taxes_usd=5.60,
+            booking_type="live",
+            is_dynamic=False,
+            is_estimate=False,  # REAL price from seats.aero
+            transfer_partners=transfers,
+            cents_per_mile=cpp,
+            notes=f"seats.aero (seen {sr.last_seen})" if sr.last_seen else "seats.aero",
+        ))
+
+    options.sort(key=lambda o: o.miles_required)
+    return options
+
+
+# ---------------------------------------------------------------------------
 # Flight schedule scraping
 # ---------------------------------------------------------------------------
 
@@ -1061,43 +1145,97 @@ async def search_awards_tool(args: dict) -> dict:
     except ValueError:
         pass  # unparseable date — let it through, search may still work
 
-    # Step 1: Scrape actual flight schedules (times, prices, flight numbers)
+    # Step 1: Scrape real award prices from seats.aero + flight schedules from Kayak
     from smart_travel.data.alliances import classify_route, normalize_airline
     from smart_travel.data.award_charts import get_redemption_options as get_options
+    from smart_travel.data.seats_aero import search_seats_aero
 
     route_region = classify_route(origin, destination)
-    scraped_flights = await _scrape_flight_schedule(origin, destination, date)
 
-    # Also ensure major carriers are included even if not found by scraper
+    # Run seats.aero and flight schedule scrapes concurrently
+    seats_task = search_seats_aero(origin, destination, date)
+    flights_task = _scrape_flight_schedule(origin, destination, date)
+    seats_results, scraped_flights = await asyncio.gather(seats_task, flights_task)
+
+    # Also ensure major carriers are included
     airlines = await _find_airlines_for_route(origin, destination, date)
 
-    # Step 2: Build M×N matrix — each scraped flight × redemption options
+    # Step 2: Build M×N matrix
     flight_results: list[dict] = []
 
+    # If we have real seats.aero data, use it as the primary source
+    has_real_data = len(seats_results) > 0
+
     if scraped_flights:
-        # Use real flight data
         for flight in scraped_flights:
-            options = get_options(
-                flight.operating_airline, cabin, route_region,
-                cash_price_usd=flight.cash_price_usd,
-            )
-            if options:
+            # Check if seats.aero has real prices for this airline
+            real_prices = [
+                s for s in seats_results
+                if _match_program_to_airline(s.program, flight.operating_airline)
+            ]
+
+            if real_prices:
+                # Use real prices from seats.aero
+                redemptions = _seats_to_redemptions(
+                    real_prices, cabin, flight.cash_price_usd
+                )
+            else:
+                # Fall back to chart estimates
+                redemptions = get_options(
+                    flight.operating_airline, cabin, route_region,
+                    cash_price_usd=flight.cash_price_usd,
+                )
+
+            if redemptions:
                 flight_results.append({
                     "flight": flight,
                     "airline": flight.operating_airline,
-                    "redemptions": options,
+                    "redemptions": redemptions,
+                    "source": "live" if real_prices else "chart",
                 })
     else:
-        # Fallback: no scraped data, use airline-level estimates
-        for airline in airlines:
-            airline_key = normalize_airline(airline)
-            options = get_options(airline_key, cabin, route_region, cash_price_usd=250.0)
-            if options:
-                flight_results.append({
-                    "flight": None,
-                    "airline": airline_key,
-                    "redemptions": options,
-                })
+        # No scraped flights — use seats.aero if available, otherwise chart
+        if seats_results:
+            seen_programs: set[str] = set()
+            for sr in seats_results:
+                if sr.program in seen_programs:
+                    continue
+                seen_programs.add(sr.program)
+                redemptions = _seats_to_redemptions([sr], cabin, 250.0)
+                if redemptions:
+                    flight_results.append({
+                        "flight": None,
+                        "airline": _program_to_airline_key(sr.program),
+                        "redemptions": redemptions,
+                        "source": "live",
+                    })
+        else:
+            for airline in airlines:
+                airline_key = normalize_airline(airline)
+                options = get_options(airline_key, cabin, route_region, cash_price_usd=250.0)
+                if options:
+                    flight_results.append({
+                        "flight": None,
+                        "airline": airline_key,
+                        "redemptions": options,
+                        "source": "chart",
+                    })
+
+    # Add seats.aero programs not yet covered by scraped flights
+    if seats_results and scraped_flights:
+        covered = {fr["airline"] for fr in flight_results}
+        for sr in seats_results:
+            ak = _program_to_airline_key(sr.program)
+            if ak and ak not in covered:
+                redemptions = _seats_to_redemptions([sr], cabin, 250.0)
+                if redemptions:
+                    flight_results.append({
+                        "flight": None,
+                        "airline": ak,
+                        "redemptions": redemptions,
+                        "source": "live",
+                    })
+                    covered.add(ak)
 
     # Step 3: Format
     return {"content": [{"type": "text", "text": _format_mn_results(
