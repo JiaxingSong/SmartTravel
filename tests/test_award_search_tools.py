@@ -153,7 +153,7 @@ class TestFormatResults:
 
     def test_shows_no_availability_message_when_empty(self) -> None:
         text = _format_results([], "SEA", "IAH", "2026-06-15", [])
-        assert "No award availability" in text
+        assert "No award data" in text
 
 
 # ---------------------------------------------------------------------------

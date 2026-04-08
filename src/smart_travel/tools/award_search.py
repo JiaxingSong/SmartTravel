@@ -935,7 +935,33 @@ async def search_awards_tool(args: dict) -> dict:
             else:
                 all_results.extend(res)
 
-    # Step 3: Format results
+    # Step 3: For airlines without live data, add award chart estimates
+    from smart_travel.data.award_charts import estimate_award_price
+
+    live_airlines = {r.airline for r in all_results if r.availability != "error"}
+    chart_estimates: list[AwardResult] = []
+
+    for airline in airlines:
+        if airline in live_airlines:
+            continue  # already have live data
+        if airline in ("southwest", "frontier", "spirit"):
+            continue  # no award programs or not supported
+        entry = estimate_award_price(airline, cabin)
+        if entry:
+            prog = _PROGRAM_NAMES.get(airline, airline.title())
+            chart_estimates.append(AwardResult(
+                airline=airline, program=entry.program,
+                origin=origin, destination=destination, date=date, cabin=cabin,
+                points=entry.miles_low, taxes_usd=5.60,
+                availability="estimate",
+                source_url="",
+                notes=f"chart estimate ({entry.miles_low:,}-{entry.miles_high:,} range)"
+                      + (" [dynamic pricing]" if entry.is_dynamic else ""),
+            ))
+
+    all_results.extend(chart_estimates)
+
+    # Step 4: Format results
     return {"content": [{"type": "text", "text": _format_results(
         all_results, origin, destination, date, failed_registration,
     )}]}
@@ -950,19 +976,34 @@ def _format_results(
 ) -> str:
     lines = [f"Award prices for {origin} -> {dest} on {date}:\n"]
 
-    available = [r for r in results if r.availability not in ("error", "none") and r.points > 0]
+    live = [r for r in results if r.availability == "available" and r.points > 0]
+    estimates = [r for r in results if r.availability == "estimate" and r.points > 0]
     errors = [r for r in results if r.availability == "error"]
 
-    if available:
+    if live:
+        lines.append("**Live award availability:**\n")
         lines.append("| Airline | Program | Cabin | Points | Taxes/Fees | Notes |")
         lines.append("|---------|---------|-------|--------|------------|-------|")
-        for r in sorted(available, key=lambda x: x.points):
+        for r in sorted(live, key=lambda x: x.points):
             lines.append(
                 f"| {r.airline.title()} | {r.program} | {r.cabin.title()} "
                 f"| {r.points:,} | ${r.taxes_usd:.2f} | {r.notes} |"
             )
-    else:
-        lines.append("No award availability found with configured accounts.")
+
+    if estimates:
+        if live:
+            lines.append("")
+        lines.append("**Award chart estimates** (published rates, not live availability):\n")
+        lines.append("| Airline | Program | Cabin | Points (est.) | Notes |")
+        lines.append("|---------|---------|-------|---------------|-------|")
+        for r in sorted(estimates, key=lambda x: x.points):
+            lines.append(
+                f"| {r.airline.title()} | {r.program} | {r.cabin.title()} "
+                f"| {r.points:,}+ | {r.notes} |"
+            )
+
+    if not live and not estimates:
+        lines.append("No award data found for this route.")
 
     if errors:
         lines.append("\nIssues encountered:")
