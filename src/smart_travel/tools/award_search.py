@@ -134,14 +134,16 @@ def _is_bot_challenge(url: str, page_text: str) -> bool:
 async def _find_airlines_for_route(origin: str, dest: str, date: str) -> list[str]:
     """Return canonical airline keys for carriers operating origin→dest.
 
-    Uses web_search internally to find current operators so the list is
-    always up-to-date rather than hard-coded.
+    Uses web_search to find current operators, then ensures major carriers
+    for the route region are always included (they may codeshare or connect
+    even if not found by search).
     """
     from smart_travel.tools.browser import web_search_tool
+    from smart_travel.data.alliances import classify_route
 
     query = (
-        f"airlines operating flights from {origin} to {dest} on {date} "
-        "nonstop one-stop United Alaska Delta American"
+        f"airlines flights from {origin} to {dest} {date} "
+        "nonstop one-stop United Delta American Alaska"
     )
     try:
         result = await web_search_tool.handler({"query": query, "max_results": 10})
@@ -155,18 +157,41 @@ async def _find_airlines_for_route(origin: str, dest: str, date: str) -> list[st
         ("united", r"\bunited\b"),
         ("alaska", r"\balaska\b"),
         ("delta", r"\bdelta\b"),
-        ("aa", r"\bamerican\b|\bAA\b|\baadvantage\b"),
+        ("american", r"\bamerican\b|\bAA\b|\baadvantage\b"),
         ("southwest", r"\bsouthwest\b"),
         ("frontier", r"\bfrontier\b"),
         ("spirit", r"\bspirit\b"),
+        ("jetblue", r"\bjetblue\b"),
+        ("air_canada", r"\bair canada\b"),
+        ("ana", r"\bANA\b|\ball nippon\b"),
+        ("jal", r"\bJAL\b|\bjapan airlines\b"),
+        ("cathay", r"\bcathay\b"),
+        ("singapore", r"\bsingapore airlines\b"),
+        ("korean_air", r"\bkorean air\b"),
+        ("british_airways", r"\bbritish airways\b"),
+        ("lufthansa", r"\blufthansa\b"),
+        ("air_france", r"\bair france\b"),
+        ("turkish", r"\bturkish\b"),
+        ("eva", r"\bEVA\b|\beva air\b"),
     ]
     for key, pattern in airline_patterns:
         if re.search(pattern, text, re.I):
             found.append(key)
 
-    # Always include the "big 4" as fallback if search returned nothing useful
-    if not found:
-        found = ["united", "alaska", "delta", "aa"]
+    # Ensure major carriers are always included for the route region
+    route_region = classify_route(origin, dest)
+
+    _REGION_DEFAULTS: dict[str, list[str]] = {
+        "domestic": ["united", "delta", "american", "alaska", "southwest"],
+        "transatlantic": ["united", "delta", "american", "british_airways", "lufthansa", "air_france"],
+        "transpacific": ["united", "delta", "american", "ana", "jal", "cathay", "korean_air", "singapore"],
+        "intra_europe": ["british_airways", "lufthansa", "air_france", "turkish"],
+        "intra_asia": ["ana", "jal", "cathay", "singapore", "korean_air", "thai", "malaysia"],
+    }
+    defaults = _REGION_DEFAULTS.get(route_region, ["united", "delta", "american", "alaska"])
+    for d in defaults:
+        if d not in found:
+            found.append(d)
 
     return found
 
