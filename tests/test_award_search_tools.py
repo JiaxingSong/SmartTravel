@@ -15,7 +15,7 @@ from smart_travel.tools.award_search import (
     _date_to_mmddyyyy,
     _parse_points,
     _parse_taxes,
-    _format_results,
+    _format_mn_results,
     search_awards_tool,
 )
 from smart_travel.tools.account_tools import add_award_account_tool, list_award_accounts_tool
@@ -134,26 +134,20 @@ class TestAwardResult:
 
 class TestFormatResults:
     def test_includes_table_when_results_present(self) -> None:
-        results = [
-            AwardResult(
-                airline="united", program="MileagePlus",
-                origin="SEA", destination="IAH", date="2026-06-15",
-                cabin="economy", points=12500, taxes_usd=5.60,
-                availability="available", source_url="https://united.com",
-            )
-        ]
-        text = _format_results(results, "SEA", "IAH", "2026-06-15", [])
-        assert "12,500" in text
+        from smart_travel.data.award_charts import get_redemption_options
+        options = get_redemption_options("united", "economy", "domestic", 224)
+        results = [{"airline": "united", "redemptions": options}]
+        text = _format_mn_results(results, "SEA", "IAH", "2026-06-15", "economy", "domestic")
         assert "MileagePlus" in text
+        assert "United" in text
 
     def test_shows_skipped_airlines(self) -> None:
-        text = _format_results([], "SEA", "IAH", "2026-06-15", ["delta", "alaska"])
-        assert "delta" in text.lower() or "Delta" in text
-        assert "registration" in text.lower() or "not supported" in text.lower()
+        text = _format_mn_results([], "SEA", "IAH", "2026-06-15", "economy", "domestic")
+        assert "No flights found" in text
 
     def test_shows_no_availability_message_when_empty(self) -> None:
-        text = _format_results([], "SEA", "IAH", "2026-06-15", [])
-        assert "No award data" in text
+        text = _format_mn_results([], "SEA", "IAH", "2026-06-15", "economy", "domestic")
+        assert "No flights found" in text
 
 
 # ---------------------------------------------------------------------------
@@ -193,20 +187,19 @@ class TestSearchAwardsTool:
         assert "content" in result
 
     @pytest.mark.anyio
-    async def test_no_accounts_returns_skipped_note(self) -> None:
-        """When no accounts and registration fails, airlines should be listed as failed."""
+    async def test_returns_mn_matrix(self) -> None:
+        """Award search should return M×N matrix with flight × redemption options."""
         with patch(
             "smart_travel.tools.award_search._find_airlines_for_route",
             new=AsyncMock(return_value=["united", "alaska"]),
         ):
-            with patch("smart_travel.tools.award_search.get_account_store") as mock_store:
-                mock_store.return_value.get_next_account.return_value = None
-                with patch("smart_travel.accounts.registration.register_account", new=AsyncMock(return_value=None)):
-                    result = await search_awards_tool.handler(
-                        {"origin": "SEA", "destination": "IAH", "date": "2026-06-15"}
-                    )
+            result = await search_awards_tool.handler(
+                {"origin": "SEA", "destination": "IAH", "date": "2026-06-15"}
+            )
         text = result["content"][0]["text"]
-        assert "registration" in text.lower() or "not supported" in text.lower()
+        # Should contain airline names and program data
+        assert "United" in text or "united" in text.lower()
+        assert "MileagePlus" in text or "Mileage Plan" in text
 
     @pytest.mark.anyio
     async def test_exception_in_one_airline_does_not_block_others(self) -> None:
