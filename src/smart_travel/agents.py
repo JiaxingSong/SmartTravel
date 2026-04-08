@@ -16,7 +16,6 @@ from smart_travel.tools.browser import (
 )
 from smart_travel.tools.preferences import save_preference_tool, get_preferences_tool
 from smart_travel.tools.award_search import search_awards_tool
-from smart_travel.tools.account_tools import add_award_account_tool, list_award_accounts_tool
 
 SYSTEM_PROMPT = """\
 You are SmartTravel, a personal AI travel agent running entirely on the user's
@@ -129,8 +128,6 @@ def create_agent_options(
             save_preference_tool,
             get_preferences_tool,
             search_awards_tool,
-            add_award_account_tool,
-            list_award_accounts_tool,
         ],
     )
     prompt = SYSTEM_PROMPT

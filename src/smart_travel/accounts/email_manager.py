@@ -161,10 +161,15 @@ class EmailManager:
         return self._email
 
     async def get_or_create_email(self) -> ManagedEmail | None:
-        """Return the managed email, creating one if needed. Fully async-safe."""
+        """Return the managed email, creating one if needed.
+
+        Provider priority:
+        1. Existing verified email (reuse)
+        2. Outlook.com (if ANTICAPTCHA_API_KEY set — real domain, airlines accept)
+        3. mail.tm (fallback — instant but airlines may reject domain)
+        """
         if self._email and self._email.verified:
-            # Refresh token if we have one
-            if not self._email.token:
+            if not self._email.token and self._email.domain != "outlook.com":
                 try:
                     self._email.token = _get_token(self._email.address, self._email.password)
                     self._save()
@@ -172,18 +177,30 @@ class EmailManager:
                     logger.debug("Token refresh failed, account may be expired")
             return self._email
 
-        # Create a new email
+        # Try Outlook first (real domain that airlines accept)
+        from smart_travel.accounts.captcha_solver import get_captcha_solver
+        solver = get_captcha_solver()
+        if solver.is_available:
+            logger.info("CAPTCHA solver available — attempting Outlook registration")
+            outlook = await self._create_outlook_email()
+            if outlook:
+                self._email = outlook
+                self._save()
+                return outlook
+            logger.warning("Outlook registration failed, falling back to mail.tm")
+
+        # Fallback to mail.tm
         try:
-            managed = self._create_email()
+            managed = self._create_mailtm_email()
             if managed:
                 self._email = managed
                 self._save()
                 return managed
         except Exception:
-            logger.warning("Email creation failed", exc_info=True)
+            logger.warning("mail.tm email creation failed", exc_info=True)
         return None
 
-    def _create_email(self) -> ManagedEmail | None:
+    def _create_mailtm_email(self) -> ManagedEmail | None:
         """Create a new mail.tm email account via API."""
         try:
             domain = _get_domain()
@@ -230,6 +247,219 @@ class EmailManager:
         except Exception:
             logger.warning("Could not get mail.tm token", exc_info=True)
             return None
+
+    # ------------------------------------------------------------------
+    # Outlook.com registration (requires CAPTCHA solver)
+    # ------------------------------------------------------------------
+
+    async def _create_outlook_email(self) -> ManagedEmail | None:
+        """Register a new Outlook.com account via Playwright + FunCaptcha solver."""
+        try:
+            from playwright.async_api import async_playwright
+        except ImportError:
+            logger.error("Playwright not installed")
+            return None
+
+        from smart_travel.accounts.captcha_solver import (
+            CaptchaSolver,
+            MICROSOFT_FUNCAPTCHA_KEY,
+            MICROSOFT_FUNCAPTCHA_SURL,
+            get_captcha_solver,
+        )
+        from smart_travel.accounts.sessions import _human_delay
+
+        tag = uuid.uuid4().hex[:8]
+        username = f"smarttravelpool{tag}"
+        email_addr = f"{username}@outlook.com"
+        password = f"SmT{uuid.uuid4().hex[:10]}!X"
+        first_names = ["Alex", "Jordan", "Taylor", "Morgan", "Casey", "Riley"]
+        last_names = ["Walker", "Rivera", "Chen", "Brooks", "Foster", "Hayes"]
+        import random
+        first = random.choice(first_names)
+        last = random.choice(last_names)
+
+        logger.info("Attempting Outlook registration: %s", email_addr)
+
+        try:
+            from smart_travel.config import load_config
+            config = load_config()
+
+            async with async_playwright() as pw:
+                browser = await pw.chromium.launch(
+                    headless=config.browser.headless,
+                    args=["--disable-blink-features=AutomationControlled", "--no-sandbox"],
+                )
+                context = await browser.new_context(
+                    user_agent=(
+                        "Mozilla/5.0 (Windows NT 10.0; Win64; x64) "
+                        "AppleWebKit/537.36 (KHTML, like Gecko) "
+                        "Chrome/122.0.0.0 Safari/537.36"
+                    ),
+                    locale="en-US",
+                    viewport={"width": 1280, "height": 800},
+                )
+                # Stealth
+                try:
+                    from smart_travel.accounts.sessions import _STEALTH_AVAILABLE
+                    if _STEALTH_AVAILABLE:
+                        from playwright_stealth import Stealth
+                        await Stealth().apply_stealth_async(context)
+                    else:
+                        from smart_travel.accounts.sessions import _MINIMAL_STEALTH_SCRIPT
+                        await context.add_init_script(_MINIMAL_STEALTH_SCRIPT)
+                except Exception:
+                    pass
+
+                page = await context.new_page()
+                page.set_default_timeout(config.browser.timeout_ms)
+
+                await page.goto("https://signup.live.com/signup", wait_until="domcontentloaded")
+                await _human_delay(2000, 3000)
+
+                # Step 1: Email
+                for sel in ["#MemberName", "#usernameInput", 'input[type="email"]']:
+                    try:
+                        await page.fill(sel, username)
+                        break
+                    except Exception:
+                        continue
+                try:
+                    await page.select_option("#LiveDomainBoxList", "outlook.com")
+                except Exception:
+                    pass
+                await _human_delay(500, 1000)
+                for sel in ["#iSignupAction", "#nextButton", 'input[type="submit"]']:
+                    try:
+                        await page.click(sel, timeout=5000)
+                        break
+                    except Exception:
+                        continue
+                await _human_delay(2000, 3000)
+
+                # Step 2: Password
+                for sel in ["#PasswordInput", "#Password", 'input[type="password"]']:
+                    try:
+                        await page.fill(sel, password)
+                        break
+                    except Exception:
+                        continue
+                await _human_delay(500, 800)
+                for sel in ["#iSignupAction", "#nextButton", 'input[type="submit"]']:
+                    try:
+                        await page.click(sel, timeout=5000)
+                        break
+                    except Exception:
+                        continue
+                await _human_delay(2000, 3000)
+
+                # Step 3: Name
+                try:
+                    await page.fill("#FirstName", first)
+                    await page.fill("#LastName", last)
+                except Exception:
+                    pass
+                await _human_delay(500, 800)
+                for sel in ["#iSignupAction", "#nextButton"]:
+                    try:
+                        await page.click(sel, timeout=5000)
+                        break
+                    except Exception:
+                        continue
+                await _human_delay(2000, 3000)
+
+                # Step 4: Birthday
+                try:
+                    await page.select_option("#BirthMonth", str(random.randint(1, 12)))
+                    await page.select_option("#BirthDay", str(random.randint(1, 28)))
+                    await page.select_option("#BirthYear", str(random.randint(1980, 1999)))
+                except Exception:
+                    pass
+                await _human_delay(500, 800)
+                for sel in ["#iSignupAction", "#nextButton"]:
+                    try:
+                        await page.click(sel, timeout=5000)
+                        break
+                    except Exception:
+                        continue
+                await _human_delay(3000, 5000)
+
+                # Step 5: FunCaptcha — solve via anti-captcha API
+                solver = get_captcha_solver()
+                token = solver.solve_funcaptcha(
+                    website_url="https://signup.live.com/signup",
+                    public_key=MICROSOFT_FUNCAPTCHA_KEY,
+                    subdomain=MICROSOFT_FUNCAPTCHA_SURL,
+                )
+                if token:
+                    # Inject the token
+                    await page.evaluate(f"""() => {{
+                        const el = document.querySelector(
+                            'input[name="fc-token"], input[name="arkose_token"], #enforcementFrame'
+                        );
+                        if (el) el.value = '{token}';
+                        // Also try the callback approach
+                        if (window.ArkoseEnforcement) {{
+                            window.ArkoseEnforcement.setConfig({{data: {{token: '{token}'}}}});
+                        }}
+                        // Try submitting via the verification callback
+                        if (typeof verifyCallback === 'function') verifyCallback('{token}');
+                    }}""")
+                    await _human_delay(1000, 2000)
+                    # Click next/submit after token injection
+                    for sel in ["#iSignupAction", "#nextButton", 'input[type="submit"]']:
+                        try:
+                            await page.click(sel, timeout=5000)
+                            break
+                        except Exception:
+                            continue
+                else:
+                    logger.warning("FunCaptcha solve failed — Outlook registration incomplete")
+
+                await _human_delay(3000, 5000)
+
+                # Check result
+                body_text = await page.evaluate("() => document.body.innerText")
+                current_url = page.url
+                is_success = any(x in current_url.lower() for x in [
+                    "outlook.live.com", "outlook.office", "account.microsoft.com",
+                ])
+                if not is_success:
+                    is_success = any(x in body_text.lower() for x in [
+                        "your account has been created", "welcome", "inbox",
+                    ])
+
+                await browser.close()
+
+                if is_success:
+                    managed = ManagedEmail(
+                        address=email_addr,
+                        password=password,
+                        first_name=first,
+                        last_name=last,
+                        domain="outlook.com",
+                        verified=True,
+                    )
+                    logger.info("Outlook account created: %s", email_addr)
+                    return managed
+                else:
+                    logger.warning("Outlook registration unclear (URL: %s)", current_url)
+                    # Save anyway in case it partially succeeded
+                    return ManagedEmail(
+                        address=email_addr,
+                        password=password,
+                        first_name=first,
+                        last_name=last,
+                        domain="outlook.com",
+                        verified=False,
+                    )
+
+        except Exception:
+            logger.warning("Outlook registration failed", exc_info=True)
+            return None
+
+    # ------------------------------------------------------------------
+    # Inbox reading (mail.tm only — Outlook needs OAuth which is complex)
+    # ------------------------------------------------------------------
 
     def read_inbox(
         self,

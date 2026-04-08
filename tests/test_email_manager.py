@@ -109,15 +109,17 @@ class TestGetOrCreateEmail:
             address="new@example.com", password="pw",
             domain="example.com", token="tok", verified=True,
         )
-        with patch.object(mgr, "_create_email", return_value=mock_email):
-            result = await mgr.get_or_create_email()
+        with patch.object(mgr, "_create_mailtm_email", return_value=mock_email):
+            with patch.object(mgr, "_create_outlook_email", new=AsyncMock(return_value=None)):
+                result = await mgr.get_or_create_email()
         assert result is not None
         assert result.address == "new@example.com"
 
     @pytest.mark.anyio
     async def test_returns_none_on_creation_failure(self, mgr: EmailManager) -> None:
-        with patch.object(mgr, "_create_email", return_value=None):
-            result = await mgr.get_or_create_email()
+        with patch.object(mgr, "_create_mailtm_email", return_value=None):
+            with patch.object(mgr, "_create_outlook_email", new=AsyncMock(return_value=None)):
+                result = await mgr.get_or_create_email()
         assert result is None
 
     @pytest.mark.anyio
@@ -126,8 +128,9 @@ class TestGetOrCreateEmail:
             address="saved@example.com", password="pw",
             domain="example.com", token="tok", verified=True,
         )
-        with patch.object(mgr, "_create_email", return_value=mock_email):
-            await mgr.get_or_create_email()
+        with patch.object(mgr, "_create_mailtm_email", return_value=mock_email):
+            with patch.object(mgr, "_create_outlook_email", new=AsyncMock(return_value=None)):
+                await mgr.get_or_create_email()
         assert mgr._path.exists()
         data = json.loads(mgr._path.read_text())
         assert data["address"] == "saved@example.com"

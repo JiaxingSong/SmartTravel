@@ -222,10 +222,31 @@ class TestAwardSearch:
 
 
 # ---------------------------------------------------------------------------
-# Entry point
+# Entry point with CLI flags
 # ---------------------------------------------------------------------------
 
 if __name__ == "__main__":
+    import argparse
+    import json as json_mod
+    from pathlib import Path
+
+    parser = argparse.ArgumentParser(description="SmartTravel E2E test runner")
+    parser.add_argument(
+        "--scenario", "-s",
+        help="Run a single scenario by name (substring match)",
+    )
+    parser.add_argument(
+        "--verbose", "-v",
+        action="store_true",
+        help="Print full agent response for each scenario",
+    )
+    parser.add_argument(
+        "--json",
+        action="store_true",
+        help="Output structured JSON results to tests/results/",
+    )
+    args = parser.parse_args()
+
     scenarios = [
         ("SEA to DFW flight search", lambda: run(
             "Find me the cheapest available flights from Seattle (SEA) to "
@@ -242,28 +263,73 @@ if __name__ == "__main__":
         ("Price monitor", lambda: run(
             "Watch flights from Seattle to Dallas and alert me if price drops below $150."
         )),
-        ("Award search no accounts", lambda: run(
+        ("Award search", lambda: run(
             "What's the point price for SEA to IAH on 06/15/2026?"
         )),
     ]
 
+    # Filter by --scenario
+    if args.scenario:
+        scenarios = [
+            (name, fn) for name, fn in scenarios
+            if args.scenario.lower() in name.lower()
+        ]
+        if not scenarios:
+            print(f"No scenario matching '{args.scenario}'")
+            sys.exit(1)
+
     passed = 0
     failed = 0
+    results_list = []
+
     for name, fn in scenarios:
         print(f"\n{'='*60}")
         print(f"SCENARIO: {name}")
         print('='*60)
+        t0 = time.time()
         try:
             result = fn()
-            print(f"\nRESPONSE:\n{result}")
-            print(f"\nPASSED: {name}")
+            elapsed = time.time() - t0
+            if args.verbose:
+                print(f"\nRESPONSE:\n{result}")
+            print(f"\nPASSED: {name} ({elapsed:.1f}s)")
             passed += 1
+            results_list.append({
+                "scenario": name,
+                "status": "passed",
+                "elapsed_seconds": round(elapsed, 1),
+                "response_length": len(result),
+                "response_preview": result[:200] if not args.verbose else result,
+            })
         except Exception as e:
-            print(f"\nFAILED: {name}")
+            elapsed = time.time() - t0
+            print(f"\nFAILED: {name} ({elapsed:.1f}s)")
             print(f"  Error: {e}")
             failed += 1
+            results_list.append({
+                "scenario": name,
+                "status": "failed",
+                "elapsed_seconds": round(elapsed, 1),
+                "error": str(e),
+            })
 
     print(f"\n{'='*60}")
     print(f"Results: {passed} passed, {failed} failed")
     print('='*60)
+
+    if args.json:
+        results_dir = Path("tests/results")
+        results_dir.mkdir(parents=True, exist_ok=True)
+        ts = time.strftime("%Y%m%d_%H%M%S")
+        out_path = results_dir / f"e2e_{ts}.json"
+        with open(out_path, "w", encoding="utf-8") as f:
+            json_mod.dump({
+                "timestamp": ts,
+                "total": len(scenarios),
+                "passed": passed,
+                "failed": failed,
+                "scenarios": results_list,
+            }, f, indent=2, ensure_ascii=False)
+        print(f"\nJSON results saved to: {out_path}")
+
     sys.exit(0 if failed == 0 else 1)
